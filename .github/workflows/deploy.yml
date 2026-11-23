@@ -273,17 +273,30 @@ jobs:
 
       - name: Publicar bundle pré-compilado na branch cpanel-deploy
         run: |
+          rm -rf /tmp/cpanel-stage
           mkdir -p /tmp/cpanel-stage/dist
-          cp -af ./prebuilt-dist/. /tmp/cpanel-stage/dist/
-          cp -af ./.cpanel.yml /tmp/cpanel-stage/.cpanel.yml
-          test -f /tmp/cpanel-stage/.cpanel.yml
-          test -f /tmp/cpanel-stage/dist/index.html
-          test -f /tmp/cpanel-stage/dist/.htaccess
+          cp -Rf ./prebuilt-dist/. /tmp/cpanel-stage/dist/
+          cp -f ./.cpanel.yml /tmp/cpanel-stage/.cpanel.yml
+
+          # Validação estrita antes do commit na branch cpanel-deploy
+          test -s /tmp/cpanel-stage/.cpanel.yml
+          test -s /tmp/cpanel-stage/dist/index.html
+          test -s /tmp/cpanel-stage/dist/.htaccess
+          test -s /tmp/cpanel-stage/dist/manifest.json
+          test -s /tmp/cpanel-stage/dist/favicon.ico
+          test -d /tmp/cpanel-stage/dist/assets
+          test -n "$(ls -A /tmp/cpanel-stage/dist/assets)"
+
+          echo "=== Conteúdo validado para branch cpanel-deploy ==="
+          ls -la /tmp/cpanel-stage/
+          ls -la /tmp/cpanel-stage/dist/
+
           cd /tmp/cpanel-stage
           git init -b cpanel-deploy
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
+          git ls-files --error-unmatch .cpanel.yml dist/index.html dist/.htaccess dist/manifest.json dist/favicon.ico
           git commit -m "deploy: dist/ + .cpanel.yml (${{ github.sha }})"
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git push --force origin cpanel-deploy

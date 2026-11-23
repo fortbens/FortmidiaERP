@@ -1,8 +1,15 @@
 ---
 deployment:
   tasks:
-    - export DEPLOYPATH_FM=/home/fo181274/fortmidia.com.br/
-    - export DEPLOYPATH_FN=/home/fo181274/fortnews.com.br/
-    - /bin/mkdir -p $DEPLOYPATH_FM $DEPLOYPATH_FN
-    - /bin/cp -af dist/. $DEPLOYPATH_FM
-    - /bin/cp -af dist/. $DEPLOYPATH_FN
+    - /bin/mkdir -p /home/fo181274/fortmidia.com.br/assets
+    - /bin/cp -f dist/index.html /home/fo181274/fortmidia.com.br/index.html
+    - /bin/cp -f dist/.htaccess /home/fo181274/fortmidia.com.br/.htaccess
+    - /bin/cp -f dist/manifest.json /home/fo181274/fortmidia.com.br/manifest.json
+    - /bin/cp -f dist/favicon.ico /home/fo181274/fortmidia.com.br/favicon.ico
+    - /bin/cp -Rf dist/assets/* /home/fo181274/fortmidia.com.br/assets/
+    - /bin/mkdir -p /home/fo181274/fortnews.com.br/assets
+    - /bin/cp -f dist/index.html /home/fo181274/fortnews.com.br/index.html
+    - /bin/cp -f dist/.htaccess /home/fo181274/fortnews.com.br/.htaccess
+    - /bin/cp -f dist/manifest.json /home/fo181274/fortnews.com.br/manifest.json
+    - /bin/cp -f dist/favicon.ico /home/fo181274/fortnews.com.br/favicon.ico
+    - /bin/cp -Rf dist/assets/* /home/fo181274/fortnews.com.br/assets/
