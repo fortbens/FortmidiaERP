@@ -1,10 +1,14 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
+  ApiResult,
+  campaignsApi,
   citizenApi,
   crmApi,
+  financeApi,
   getApiAuthToken,
   newsApi,
   stateApi,
+  usersApi,
 } from '../services/api';
 import {
   getNextPautaInternalCode,
@@ -302,6 +306,16 @@ interface FortMidiaContextValue extends FortMidiaState {
   deleteSiteAdBanner: (id: string) => void;
   updateSiteAdsConfig: (patch: Partial<SiteAdsConfig>) => void;
 
+  /* Integração Real MySQL / PHP (/api) */
+  apiMode: 'checking' | 'online' | 'offline';
+  apiSyncLoading: boolean;
+  apiSyncError: string | null;
+  apiSyncMessage: string | null;
+  isDatabaseEmpty: boolean;
+  clearApiFeedback: () => void;
+  refreshFromMysql: (authenticatedUser?: Partial<TeamMember>) => Promise<boolean>;
+  syncInitialDataToMysql: () => Promise<{ ok: boolean; summary: string }>;
+
   resetDemoData: () => void;
 }
 
@@ -526,62 +540,454 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     state.siteSettings.backgroundColor,
   ]);
 
-  const hasHydratedFromApi = useRef(false);
+  const [apiMode, setApiMode] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [apiSyncLoading, setApiSyncLoading] = useState(false);
+  const [apiSyncError, setApiSyncError] = useState<string | null>(null);
+  const [apiSyncMessage, setApiSyncMessage] = useState<string | null>(null);
+  const [isDatabaseEmpty, setIsDatabaseEmpty] = useState(false);
 
-  // Tenta hidratar estado inicial a partir da API REST (PHP/MySQL); mantém localStorage como fallback transparente
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const snapshotRes = await stateApi.fetchSnapshot<FortMidiaState>();
-      if (!cancelled && snapshotRes.ok && snapshotRes.data?.state) {
-        const remote = snapshotRes.data.state;
-        setState((prev) => ({
-          ...prev,
-          ...remote,
-          pautas: hydratePautasWithInternalCodes(remote.pautas ?? prev.pautas),
-          siteSettings: { ...prev.siteSettings, ...(remote.siteSettings ?? {}) },
-          newsPortalSettings: { ...prev.newsPortalSettings, ...(remote.newsPortalSettings ?? {}) },
-          teamMembers: remote.teamMembers ? hydrateTeamMembers(remote.teamMembers) : prev.teamMembers,
-          budgetCatalog: remote.budgetCatalog
-            ? hydrateBudgetCatalog(remote.budgetCatalog)
-            : prev.budgetCatalog,
-        }));
-        hasHydratedFromApi.current = true;
+  const apiModeRef = useRef<'checking' | 'online' | 'offline'>('checking');
+  apiModeRef.current = apiMode;
+
+  const stateRef = useRef<FortMidiaState>(state);
+  stateRef.current = state;
+
+  const hasHydratedFromApi = useRef(false);
+  const skipNextSnapshotSave = useRef(false);
+
+  const clearApiFeedback = useCallback(() => {
+    setApiSyncError(null);
+    setApiSyncMessage(null);
+  }, []);
+
+  const reportApiError = useCallback((actionLabel: string, res: ApiResult<unknown>) => {
+    const statusLabel = res.status > 0 ? ` (HTTP ${res.status})` : '';
+    const detail = res.error || 'Falha desconhecida ao gravar no MySQL.';
+    setApiSyncMessage(null);
+    setApiSyncError(`Erro ao ${actionLabel} no MySQL${statusLabel}: ${detail}`);
+  }, []);
+
+  const runApiMutation = useCallback(
+    <T,>(
+      actionLabel: string,
+      execute: () => Promise<ApiResult<T>>,
+      options: {
+        skipAuth?: boolean;
+        onRollback?: () => void;
+        onSuccess?: (data: T | undefined) => void;
+      } = {}
+    ) => {
+      const { skipAuth = false, onRollback, onSuccess } = options;
+      const mode = apiModeRef.current;
+
+      if (mode === 'offline') {
         return;
       }
 
-      // Mesmo sem snapshot completo autenticado, tenta buscar notícias públicas do Portal FortNews
-      const publicNewsRes = await newsApi.list();
-      if (!cancelled && publicNewsRes.ok && Array.isArray(publicNewsRes.data?.items) && publicNewsRes.data.items.length > 0) {
-        setState((prev) => ({
-          ...prev,
-          pautas: hydratePautasWithInternalCodes(publicNewsRes.data!.items),
-        }));
+      if (!skipAuth && !getApiAuthToken()) {
+        if (mode === 'online') {
+          onRollback?.();
+          setApiSyncMessage(null);
+          setApiSyncError(
+            `Não foi possível ${actionLabel}: sessão sem token de autenticação na API. Faça login novamente.`
+          );
+        }
+        return;
       }
-      hasHydratedFromApi.current = true;
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // Ignore quota errors in restricted sandboxes
+      void (async () => {
+        const res = await execute();
+        if (!res.ok) {
+          if (apiModeRef.current === 'online' || !res.networkUnavailable) {
+            onRollback?.();
+            reportApiError(actionLabel, res);
+          }
+          return;
+        }
+        setApiSyncError(null);
+        onSuccess?.(res.data);
+      })();
+    },
+    [reportApiError]
+  );
+
+  const refreshFromMysql = useCallback(
+    async (authenticatedUser?: Partial<TeamMember>): Promise<boolean> => {
+      const health = await stateApi.health();
+      const online = Boolean(health.ok && health.data?.ok === true);
+      setApiMode(online ? 'online' : 'offline');
+      apiModeRef.current = online ? 'online' : 'offline';
+
+      if (!online) {
+        hasHydratedFromApi.current = true;
+        return false;
+      }
+
+      setApiSyncLoading(true);
+      setApiSyncError(null);
+
+      try {
+        const hasToken = Boolean(getApiAuthToken());
+
+        if (!hasToken) {
+          const publicNewsRes = await newsApi.list();
+          if (publicNewsRes.ok && Array.isArray(publicNewsRes.data?.items)) {
+            skipNextSnapshotSave.current = true;
+            setState((prev) => ({
+              ...prev,
+              pautas: hydratePautasWithInternalCodes(publicNewsRes.data!.items),
+            }));
+          }
+          hasHydratedFromApi.current = true;
+          return true;
+        }
+
+        const [
+          contractsRes,
+          leadsRes,
+          tasksRes,
+          pautasRes,
+          financeRes,
+          campaignsRes,
+          outdoorsRes,
+          demandasRes,
+          usersRes,
+          snapshotRes,
+        ] = await Promise.all([
+          crmApi.listContracts(),
+          crmApi.listLeads(),
+          crmApi.listTasks(),
+          newsApi.list(),
+          financeApi.list(),
+          campaignsApi.listCampaigns(),
+          campaignsApi.listOutdoors(),
+          citizenApi.list(),
+          usersApi.list(),
+          stateApi.fetchSnapshot<FortMidiaState>(),
+        ]);
+
+        const errors: string[] = [];
+        const checkCore = (label: string, res: ApiResult<unknown>, allow403 = false) => {
+          if (!res.ok) {
+            if (allow403 && res.status === 403) return;
+            errors.push(`${label} (HTTP ${res.status || 'rede'}): ${res.error || 'erro'}`);
+          }
+        };
+
+        checkCore('Contratos', contractsRes);
+        checkCore('Leads', leadsRes);
+        checkCore('Matérias/Pautas', pautasRes);
+        checkCore('Demandas Cidadãs', demandasRes);
+        checkCore('Usuários', usersRes, true);
+        // Tabelas opcionais em versões anteriores do PHP não travam, mas registram erro se 500/401
+        if (!financeRes.ok && financeRes.status !== 404) checkCore('Financeiro', financeRes);
+        if (!campaignsRes.ok && campaignsRes.status !== 404) checkCore('Campanhas', campaignsRes);
+        if (!outdoorsRes.ok && outdoorsRes.status !== 404) checkCore('Outdoors', outdoorsRes);
+        if (!tasksRes.ok && tasksRes.status !== 404) checkCore('Pipeline/Tarefas', tasksRes);
+
+        const nextContracts =
+          contractsRes.ok && Array.isArray(contractsRes.data?.items)
+            ? contractsRes.data.items
+            : null;
+        const nextLeads =
+          leadsRes.ok && Array.isArray(leadsRes.data?.items) ? leadsRes.data.items : null;
+        const nextTasks =
+          tasksRes.ok && Array.isArray(tasksRes.data?.items) ? tasksRes.data.items : null;
+        const nextPautas =
+          pautasRes.ok && Array.isArray(pautasRes.data?.items)
+            ? hydratePautasWithInternalCodes(pautasRes.data.items)
+            : null;
+        const nextFinance =
+          financeRes.ok && Array.isArray(financeRes.data?.items) ? financeRes.data.items : null;
+        const nextCampaigns =
+          campaignsRes.ok && Array.isArray(campaignsRes.data?.items)
+            ? campaignsRes.data.items
+            : null;
+        const nextOutdoors =
+          outdoorsRes.ok && Array.isArray(outdoorsRes.data?.items) ? outdoorsRes.data.items : null;
+        const nextReports =
+          demandasRes.ok && Array.isArray(demandasRes.data?.items)
+            ? demandasRes.data.items
+            : null;
+        const nextUsers =
+          usersRes.ok && Array.isArray(usersRes.data?.items)
+            ? hydrateTeamMembers(usersRes.data.items)
+            : null;
+
+        skipNextSnapshotSave.current = true;
+        setState((prev) => {
+          const snapshot =
+            snapshotRes.ok && snapshotRes.data?.state ? snapshotRes.data.state : null;
+
+          let resolvedMembers = nextUsers ?? (snapshot?.teamMembers ? hydrateTeamMembers(snapshot.teamMembers) : prev.teamMembers);
+          if (authenticatedUser?.id) {
+            const exists = resolvedMembers.some(
+              (m) =>
+                m.id === authenticatedUser.id ||
+                (authenticatedUser.email &&
+                  m.email.toLowerCase() === authenticatedUser.email.toLowerCase())
+            );
+            if (!exists) {
+              const preset =
+                ROLE_PRESETS[(authenticatedUser.role as TeamRole) || 'Super Admin / Diretoria'] ??
+                ROLE_PRESETS['Super Admin / Diretoria'];
+              const injected: TeamMember = {
+                id: authenticatedUser.id,
+                name: authenticatedUser.name || 'Super Admin',
+                role: (authenticatedUser.role as TeamRole) || 'Super Admin / Diretoria',
+                hierarchyLevel: authenticatedUser.hierarchyLevel ?? preset.hierarchyLevel,
+                department: authenticatedUser.department || 'Diretoria Executiva',
+                email: authenticatedUser.email || '',
+                phone: authenticatedUser.phone || '(11) 95779-2424',
+                password: '',
+                avatarUrl:
+                  authenticatedUser.avatarUrl || '/assets/aistudio/Logo_FortM_dia_ded2b7d7.png',
+                bio: authenticatedUser.bio || '',
+                active: authenticatedUser.active ?? true,
+                createdAt:
+                  authenticatedUser.createdAt || new Date().toLocaleDateString('pt-BR'),
+                allowedModules:
+                  authenticatedUser.allowedModules && authenticatedUser.allowedModules.length > 0
+                    ? authenticatedUser.allowedModules
+                    : [...preset.allowedModules],
+                permissions: authenticatedUser.permissions ?? { ...preset.permissions },
+                linkedClientName: authenticatedUser.linkedClientName,
+              };
+              resolvedMembers = [injected, ...resolvedMembers];
+            }
+          }
+
+          const matchedActiveId = authenticatedUser?.id
+            ? (resolvedMembers.find(
+                (m) =>
+                  m.id === authenticatedUser.id ||
+                  (authenticatedUser.email &&
+                    m.email.toLowerCase() === authenticatedUser.email.toLowerCase())
+              )?.id ?? prev.activeAdminUserId)
+            : resolvedMembers.some((m) => m.id === prev.activeAdminUserId)
+              ? prev.activeAdminUserId
+              : (resolvedMembers[0]?.id ?? prev.activeAdminUserId);
+
+          // Quando a API MySQL está online, usa diretamente as tabelas reais (mesmo vazias),
+          // sem manter mocks locais como fallback silencioso.
+          return {
+            ...prev,
+            ...(snapshot ?? {}),
+            contracts: nextContracts !== null ? nextContracts : [],
+            leads: nextLeads !== null ? nextLeads : [],
+            pautas: nextPautas !== null ? nextPautas : [],
+            citizenReports: nextReports !== null ? nextReports : [],
+            financialEntries:
+              nextFinance !== null
+                ? nextFinance
+                : (snapshot?.financialEntries ?? []),
+            advertisingCampaigns:
+              nextCampaigns !== null
+                ? nextCampaigns
+                : (snapshot?.advertisingCampaigns ?? []),
+            outdoorPoints:
+              nextOutdoors !== null
+                ? nextOutdoors
+                : (snapshot?.outdoorPoints ?? prev.outdoorPoints),
+            clientTasks:
+              nextTasks !== null ? nextTasks : (snapshot?.clientTasks ?? []),
+            teamMembers: resolvedMembers,
+            activeAdminUserId: matchedActiveId,
+            siteSettings: { ...prev.siteSettings, ...(snapshot?.siteSettings ?? {}) },
+            newsPortalSettings: {
+              ...prev.newsPortalSettings,
+              ...(snapshot?.newsPortalSettings ?? {}),
+            },
+            budgetCatalog: snapshot?.budgetCatalog
+              ? hydrateBudgetCatalog(snapshot.budgetCatalog)
+              : prev.budgetCatalog,
+          };
+        });
+
+        const contractsCount = nextContracts?.length ?? 0;
+        const leadsCount = nextLeads?.length ?? 0;
+        const pautasCount = nextPautas?.length ?? 0;
+        setIsDatabaseEmpty(contractsCount === 0 && leadsCount === 0 && pautasCount === 0);
+
+        if (errors.length > 0) {
+          setApiSyncError(`Avisos ao carregar dados do MySQL: ${errors.join(' · ')}`);
+        }
+
+        hasHydratedFromApi.current = true;
+        return errors.length === 0;
+      } finally {
+        setApiSyncLoading(false);
+      }
+    },
+    []
+  );
+
+  const syncInitialDataToMysql = useCallback(async (): Promise<{
+    ok: boolean;
+    summary: string;
+  }> => {
+    const health = await stateApi.health();
+    const online = Boolean(health.ok && health.data?.ok === true);
+    setApiMode(online ? 'online' : 'offline');
+    apiModeRef.current = online ? 'online' : 'offline';
+
+    if (!online) {
+      const msg = 'API PHP em /api/health não respondeu ok: true. Verifique a hospedagem antes de sincronizar.';
+      setApiSyncError(msg);
+      return { ok: false, summary: msg };
     }
 
-    if (!hasHydratedFromApi.current || !getApiAuthToken()) {
+    if (!getApiAuthToken()) {
+      const msg = 'Faça login com um usuário administrador autenticado na API para sincronizar o MySQL.';
+      setApiSyncError(msg);
+      return { ok: false, summary: msg };
+    }
+
+    setApiSyncLoading(true);
+    setApiSyncError(null);
+    setApiSyncMessage(null);
+
+    try {
+      const seedPayload = {
+        contracts: INITIAL_CONTRACTS,
+        leads: INITIAL_LEADS,
+        users: INITIAL_TEAM_MEMBERS,
+        pautas: hydratePautasWithInternalCodes(INITIAL_PAUTAS),
+        financialEntries: INITIAL_FINANCIAL_ENTRIES,
+        campaigns: INITIAL_ADVERTISING_CAMPAIGNS,
+        outdoors: INITIAL_OUTDOOR_POINTS,
+        citizenReports: INITIAL_CITIZEN_REPORTS,
+        clientTasks: INITIAL_CLIENT_TASKS,
+        stateSnapshot: DEFAULT_STATE,
+      };
+
+      // 1. Tenta endpoint otimizado /api/sync/seed
+      const bulkRes = await stateApi.seedInitialData(seedPayload);
+      if (bulkRes.ok) {
+        const inserted = bulkRes.data?.inserted;
+        const summary = inserted
+          ? `Sincronização inicial concluída no MySQL: ${inserted.contracts ?? 0} contratos, ${inserted.leads ?? 0} leads, ${inserted.users ?? 0} usuários, ${inserted.pautas ?? 0} matérias, ${inserted.financialEntries ?? 0} lançamentos financeiros.`
+          : bulkRes.data?.message || 'Dados iniciais sincronizados com sucesso no MySQL.';
+        await refreshFromMysql();
+        setApiSyncMessage(summary);
+        return { ok: true, summary };
+      }
+
+      // 2. Se /api/sync/seed ainda não existir na API PHP implantada (HTTP 404),
+      // faz sincronização item a item via POST nos endpoints individuais.
+      if (bulkRes.status !== 404) {
+        const err = `Falha ao sincronizar dados iniciais no MySQL (HTTP ${bulkRes.status}): ${bulkRes.error || 'erro interno'}`;
+        setApiSyncError(err);
+        return { ok: false, summary: err };
+      }
+
+      const counts = {
+        contracts: 0,
+        leads: 0,
+        users: 0,
+        pautas: 0,
+        finance: 0,
+        campaigns: 0,
+        outdoors: 0,
+        reports: 0,
+      };
+      const failures: string[] = [];
+
+      for (const c of seedPayload.contracts) {
+        const r = await crmApi.createContract(c);
+        if (r.ok) counts.contracts += 1;
+        else if (r.status !== 409) failures.push(`Contrato ${c.clientName}: HTTP ${r.status}`);
+      }
+      for (const l of seedPayload.leads) {
+        const r = await crmApi.createLead(l, true);
+        if (r.ok) counts.leads += 1;
+        else if (r.status !== 409) failures.push(`Lead ${l.companyOrName}: HTTP ${r.status}`);
+      }
+      for (const u of seedPayload.users) {
+        const r = await usersApi.create(u);
+        if (r.ok) counts.users += 1;
+        else if (r.status !== 409 && r.status !== 400) failures.push(`Usuário ${u.name}: HTTP ${r.status}`);
+      }
+      for (const p of seedPayload.pautas) {
+        const r = await newsApi.create(p);
+        if (r.ok) counts.pautas += 1;
+        else if (r.status !== 409) failures.push(`Matéria ${p.id}: HTTP ${r.status}`);
+      }
+      for (const f of seedPayload.financialEntries) {
+        const r = await financeApi.create(f);
+        if (r.ok) counts.finance += 1;
+      }
+      for (const camp of seedPayload.campaigns) {
+        const r = await campaignsApi.createCampaign(camp);
+        if (r.ok) counts.campaigns += 1;
+      }
+      for (const out of seedPayload.outdoors) {
+        const r = await campaignsApi.createOutdoor(out);
+        if (r.ok) counts.outdoors += 1;
+      }
+      for (const rep of seedPayload.citizenReports) {
+        const r = await citizenApi.submit(rep);
+        if (r.ok) counts.reports += 1;
+      }
+
+      await stateApi.saveSnapshot(DEFAULT_STATE);
+      await refreshFromMysql();
+
+      const totalInserted = Object.values(counts).reduce((a, b) => a + b, 0);
+      if (totalInserted === 0 && failures.length > 0) {
+        const err = `Não foi possível popular as tabelas no MySQL. Atualize o arquivo api/index.php no servidor. Detalhes: ${failures.slice(0, 3).join('; ')}`;
+        setApiSyncError(err);
+        return { ok: false, summary: err };
+      }
+
+      const summary = `Sincronização concluída no MySQL: ${counts.contracts} contratos, ${counts.leads} leads, ${counts.users} usuários, ${counts.pautas} matérias, ${counts.finance} financeiro.`;
+      if (failures.length > 0) {
+        setApiSyncError(`Sincronizado parcialmente (${summary}). Pendências: ${failures.slice(0, 3).join('; ')}`);
+      } else {
+        setApiSyncMessage(summary);
+      }
+      return { ok: failures.length === 0, summary };
+    } finally {
+      setApiSyncLoading(false);
+    }
+  }, [refreshFromMysql]);
+
+  // Verifica /api/health na inicialização e prioriza o MySQL sempre que a API estiver online
+  useEffect(() => {
+    void refreshFromMysql();
+  }, [refreshFromMysql]);
+
+  useEffect(() => {
+    // Em ambiente offline/preview sem API PHP, persiste em localStorage;
+    // quando a API MySQL está online, o banco MySQL é a fonte de verdade.
+    if (apiMode !== 'online') {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch {
+        // Ignore quota errors in restricted sandboxes
+      }
+    }
+
+    if (skipNextSnapshotSave.current) {
+      skipNextSnapshotSave.current = false;
+      return;
+    }
+
+    if (!hasHydratedFromApi.current || apiMode !== 'online' || !getApiAuthToken()) {
       return;
     }
 
     const syncTimer = window.setTimeout(() => {
-      void stateApi.saveSnapshot(state);
+      void (async () => {
+        const res = await stateApi.saveSnapshot(state);
+        if (!res.ok && !res.networkUnavailable && res.status !== 404) {
+          reportApiError('sincronizar configurações CMS', res);
+        }
+      })();
     }, 900);
 
     return () => window.clearTimeout(syncTimer);
-  }, [state]);
+  }, [state, apiMode, reportApiError]);
 
   const formatNow = () => {
     const now = new Date();
@@ -599,16 +1005,21 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       createdAt: formatNow(),
       status: 'Aguardando Triagem',
     };
+    const prevReports = stateRef.current.citizenReports;
     setState((prev) => ({
       ...prev,
       citizenReports: [newReport, ...prev.citizenReports],
     }));
-    void citizenApi.submit(newReport);
+    runApiMutation('registrar demanda cidadã', () => citizenApi.submit(newReport), {
+      skipAuth: true,
+      onRollback: () => setState((prev) => ({ ...prev, citizenReports: prevReports })),
+    });
     return newReport;
   };
 
   const runAutoTriage = () => {
     let triagedCount = 0;
+    const triagedUpdates: CitizenReport[] = [];
     setState((prev) => {
       const updated = prev.citizenReports.map((report) => {
         if (report.status !== 'Aguardando Triagem') return report;
@@ -639,46 +1050,60 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               ? 'Núcleo Editorial · Caieiras/Serra'
               : 'Correspondente · Cajamar/Anhanguera';
 
-        return {
+        const nextItem: CitizenReport = {
           ...report,
           status: 'Triado · Alta Prioridade' as CitizenStatus,
           triageScore: finalScore,
           assignedEditor,
         };
+        triagedUpdates.push(nextItem);
+        return nextItem;
       });
       return { ...prev, citizenReports: updated };
     });
+    for (const item of triagedUpdates) {
+      runApiMutation('atualizar triagem da demanda', () =>
+        citizenApi.update(item.id, {
+          status: item.status,
+          triageScore: item.triageScore,
+          assignedEditor: item.assignedEditor,
+        })
+      );
+    }
     return triagedCount;
   };
 
   const updateCitizenStatus = (id: string, status: CitizenStatus) => {
+    const prevReports = stateRef.current.citizenReports;
     setState((prev) => ({
       ...prev,
       citizenReports: prev.citizenReports.map((r) => (r.id === id ? { ...r, status } : r)),
     }));
-    if (getApiAuthToken()) {
-      void citizenApi.updateStatus(id, status);
-    }
+    runApiMutation('atualizar status da demanda', () => citizenApi.updateStatus(id, status), {
+      onRollback: () => setState((prev) => ({ ...prev, citizenReports: prevReports })),
+    });
   };
 
   const updateCitizenReport = (id: string, patch: Partial<CitizenReport>) => {
+    const prevReports = stateRef.current.citizenReports;
     setState((prev) => ({
       ...prev,
       citizenReports: prev.citizenReports.map((r) => (r.id === id ? { ...r, ...patch } : r)),
     }));
-    if (patch.status && getApiAuthToken()) {
-      void citizenApi.updateStatus(id, patch.status);
-    }
+    runApiMutation('atualizar demanda cidadã', () => citizenApi.update(id, patch), {
+      onRollback: () => setState((prev) => ({ ...prev, citizenReports: prevReports })),
+    });
   };
 
   const deleteCitizenReport = (id: string) => {
+    const prevReports = stateRef.current.citizenReports;
     setState((prev) => ({
       ...prev,
       citizenReports: prev.citizenReports.filter((r) => r.id !== id),
     }));
-    if (getApiAuthToken()) {
-      void citizenApi.remove(id);
-    }
+    runApiMutation('excluir demanda cidadã', () => citizenApi.remove(id), {
+      onRollback: () => setState((prev) => ({ ...prev, citizenReports: prevReports })),
+    });
   };
 
   const promoteReportToPauta = (
@@ -686,54 +1111,72 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     format: EditorialPauta['format'],
     reporterId?: string
   ) => {
-    setState((prev) => {
-      const target = prev.citizenReports.find((r) => r.id === reportId);
-      if (!target) return prev;
+    const snapshot = stateRef.current;
+    const target = snapshot.citizenReports.find((r) => r.id === reportId);
+    if (!target) return;
 
-      const selectedReporter = reporterId
-        ? prev.reporters.find((rep) => rep.id === reporterId)
-        : undefined;
+    const selectedReporter = reporterId
+      ? snapshot.reporters.find((rep) => rep.id === reporterId)
+      : undefined;
 
-      const alreadyExists = prev.pautas.some((p) => p.sourceProtocol === target.protocol);
-      const nextPautas = alreadyExists
-        ? prev.pautas
-        : [
-            {
-              id: `pau-${Date.now()}`,
-              internalCode: getNextPautaInternalCode(prev.pautas),
-              title: `${target.title} (${target.neighborhood})`,
-              city: target.city,
-              seal: (target.urgency === 'Crítica' ? 'Urgente' : 'Cidade & Política') as NewsSeal,
-              format,
-              reporter:
-                selectedReporter?.name || target.assignedEditor || 'Redação Central FortNews',
-              assignedReporterId: selectedReporter?.id,
-              deadline: new Date().toLocaleDateString('pt-BR'),
-              status: 'Apuração de Rua' as PautaStatus,
-              approvalStatus: 'Aguardando Redator-Chefe' as const,
-              summary: target.description.slice(0, 160),
-              body: target.officialResponseNote
-                ? `${target.description}\n\nNota devolutiva registrada:\n${target.officialResponseNote}`
-                : target.description,
-              sourceProtocol: target.protocol,
-            },
-            ...prev.pautas,
-          ];
+    const alreadyExists = snapshot.pautas.some((p) => p.sourceProtocol === target.protocol);
+    const createdPauta: EditorialPauta | null = alreadyExists
+      ? null
+      : {
+          id: `pau-${Date.now()}`,
+          internalCode: getNextPautaInternalCode(snapshot.pautas),
+          title: `${target.title} (${target.neighborhood})`,
+          city: target.city,
+          seal: (target.urgency === 'Crítica' ? 'Urgente' : 'Cidade & Política') as NewsSeal,
+          format,
+          reporter:
+            selectedReporter?.name || target.assignedEditor || 'Redação Central FortNews',
+          assignedReporterId: selectedReporter?.id,
+          deadline: new Date().toLocaleDateString('pt-BR'),
+          status: 'Apuração de Rua' as PautaStatus,
+          approvalStatus: 'Aguardando Redator-Chefe' as const,
+          summary: target.description.slice(0, 160),
+          body: target.officialResponseNote
+            ? `${target.description}\n\nNota devolutiva registrada:\n${target.officialResponseNote}`
+            : target.description,
+          sourceProtocol: target.protocol,
+        };
 
-      return {
-        ...prev,
-        citizenReports: prev.citizenReports.map((r) =>
-          r.id === reportId
-            ? {
-                ...r,
-                status: 'Convertido em Pauta',
-                assignedEditor: selectedReporter?.name || r.assignedEditor,
-              }
-            : r
-        ),
-        pautas: nextPautas,
-      };
-    });
+    const prevReports = snapshot.citizenReports;
+    const prevPautas = snapshot.pautas;
+    const assignedEditor = selectedReporter?.name || target.assignedEditor;
+
+    setState((prev) => ({
+      ...prev,
+      citizenReports: prev.citizenReports.map((r) =>
+        r.id === reportId
+          ? {
+              ...r,
+              status: 'Convertido em Pauta',
+              assignedEditor,
+            }
+          : r
+      ),
+      pautas: createdPauta ? [createdPauta, ...prev.pautas] : prev.pautas,
+    }));
+
+    runApiMutation(
+      'converter demanda em pauta',
+      () =>
+        citizenApi.update(reportId, {
+          status: 'Convertido em Pauta',
+          assignedEditor,
+        }),
+      {
+        onRollback: () => setState((prev) => ({ ...prev, citizenReports: prevReports })),
+      }
+    );
+
+    if (createdPauta) {
+      runApiMutation('criar pauta a partir de demanda', () => newsApi.create(createdPauta), {
+        onRollback: () => setState((prev) => ({ ...prev, pautas: prevPautas })),
+      });
+    }
   };
 
   const submitCommercialLead: FortMidiaContextValue['submitCommercialLead'] = (payload) => {
@@ -743,159 +1186,211 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       createdAt: formatNow(),
       status: 'Novo Lead',
     };
+    const prevLeads = stateRef.current.leads;
     setState((prev) => ({
       ...prev,
       leads: [newLead, ...prev.leads],
     }));
-    void crmApi.createLead(newLead);
+    runApiMutation('salvar lead comercial', () => crmApi.createLead(newLead, Boolean(getApiAuthToken())), {
+      skipAuth: true,
+      onRollback: () => setState((prev) => ({ ...prev, leads: prevLeads })),
+      onSuccess: () => setIsDatabaseEmpty(false),
+    });
     return newLead;
   };
 
   const updateLead = (id: string, patch: Partial<CommercialLead>) => {
+    const prevLeads = stateRef.current.leads;
     setState((prev) => ({
       ...prev,
       leads: prev.leads.map((l) => (l.id === id ? { ...l, ...patch } : l)),
     }));
+    runApiMutation('atualizar lead comercial', () => crmApi.updateLead(id, patch), {
+      onRollback: () => setState((prev) => ({ ...prev, leads: prevLeads })),
+    });
   };
 
   const updateLeadStatus = (id: string, status: CommercialLead['status']) => {
+    const prevLeads = stateRef.current.leads;
     setState((prev) => ({
       ...prev,
       leads: prev.leads.map((l) => (l.id === id ? { ...l, status } : l)),
     }));
+    runApiMutation('atualizar status do lead', () => crmApi.updateLead(id, { status }), {
+      onRollback: () => setState((prev) => ({ ...prev, leads: prevLeads })),
+    });
   };
 
   const deleteLead = (id: string) => {
+    const prevLeads = stateRef.current.leads;
     setState((prev) => ({
       ...prev,
       leads: prev.leads.filter((l) => l.id !== id),
     }));
+    runApiMutation('excluir lead comercial', () => crmApi.deleteLead(id), {
+      onRollback: () => setState((prev) => ({ ...prev, leads: prevLeads })),
+    });
   };
 
   const addContract = (contract: Omit<CommercialContract, 'id'>) => {
     const newContract: CommercialContract = {
       ...contract,
-      id: `ctr-${Date.now().toString().slice(-4)}`,
+      id: `ctr-${Date.now().toString().slice(-6)}`,
     };
+    const prevContracts = stateRef.current.contracts;
     setState((prev) => ({
       ...prev,
       contracts: [newContract, ...prev.contracts],
     }));
+    runApiMutation('criar contrato comercial', () => crmApi.createContract(newContract), {
+      onRollback: () => setState((prev) => ({ ...prev, contracts: prevContracts })),
+      onSuccess: () => setIsDatabaseEmpty(false),
+    });
   };
 
   const updateContract = (id: string, patch: Partial<CommercialContract>) => {
+    const prevContracts = stateRef.current.contracts;
     setState((prev) => ({
       ...prev,
       contracts: prev.contracts.map((c) => (c.id === id ? { ...c, ...patch } : c)),
     }));
+    runApiMutation('atualizar contrato comercial', () => crmApi.updateContract(id, patch), {
+      onRollback: () => setState((prev) => ({ ...prev, contracts: prevContracts })),
+    });
   };
 
   const updateContractStatus = (id: string, status: ContractStatus) => {
+    const prevContracts = stateRef.current.contracts;
     setState((prev) => ({
       ...prev,
       contracts: prev.contracts.map((c) => (c.id === id ? { ...c, status } : c)),
     }));
+    runApiMutation('atualizar status do contrato', () => crmApi.updateContract(id, { status }), {
+      onRollback: () => setState((prev) => ({ ...prev, contracts: prevContracts })),
+    });
   };
 
   const deleteContract = (id: string) => {
+    const prevContracts = stateRef.current.contracts;
     setState((prev) => ({
       ...prev,
       contracts: prev.contracts.filter((c) => c.id !== id),
     }));
+    runApiMutation('excluir contrato comercial', () => crmApi.deleteContract(id), {
+      onRollback: () => setState((prev) => ({ ...prev, contracts: prevContracts })),
+    });
   };
 
   const addPauta = (pauta: Omit<EditorialPauta, 'id'>) => {
+    const prevPautas = stateRef.current.pautas;
+    const created: EditorialPauta = {
+      ...pauta,
+      id: `pau-${Date.now()}-${Math.floor(Math.random() * 100)}`,
+      internalCode: pauta.internalCode || getNextPautaInternalCode(prevPautas),
+    };
     setState((prev) => ({
       ...prev,
-      pautas: [
-        {
-          ...pauta,
-          id: `pau-${Date.now()}-${Math.floor(Math.random() * 100)}`,
-          internalCode: pauta.internalCode || getNextPautaInternalCode(prev.pautas),
-        },
-        ...prev.pautas,
-      ],
+      pautas: [created, ...prev.pautas],
     }));
+    runApiMutation('criar matéria/pauta', () => newsApi.create(created), {
+      onRollback: () => setState((prev) => ({ ...prev, pautas: prevPautas })),
+      onSuccess: () => setIsDatabaseEmpty(false),
+    });
   };
 
   const updatePautaStatus = (id: string, status: PautaStatus) => {
+    const prevPautas = stateRef.current.pautas;
     setState((prev) => ({
       ...prev,
       pautas: prev.pautas.map((p) => (p.id === id ? { ...p, status } : p)),
     }));
+    runApiMutation('atualizar status da pauta', () => newsApi.update(id, { status }), {
+      onRollback: () => setState((prev) => ({ ...prev, pautas: prevPautas })),
+    });
   };
 
   const updatePautaSeal = (id: string, seal: NewsSeal) => {
+    const prevPautas = stateRef.current.pautas;
     setState((prev) => ({
       ...prev,
       pautas: prev.pautas.map((p) => (p.id === id ? { ...p, seal } : p)),
     }));
+    runApiMutation('atualizar selo da matéria', () => newsApi.update(id, { seal }), {
+      onRollback: () => setState((prev) => ({ ...prev, pautas: prevPautas })),
+    });
   };
 
   const updatePautaContent = (id: string, patch: Partial<EditorialPauta>) => {
+    const prevPautas = stateRef.current.pautas;
     setState((prev) => ({
       ...prev,
       pautas: prev.pautas.map((p) => (p.id === id ? { ...p, ...patch } : p)),
     }));
+    runApiMutation('editar matéria/pauta', () => newsApi.update(id, patch), {
+      onRollback: () => setState((prev) => ({ ...prev, pautas: prevPautas })),
+    });
   };
 
   const deletePauta = (id: string) => {
+    const prevPautas = stateRef.current.pautas;
     setState((prev) => ({
       ...prev,
       pautas: prev.pautas.filter((p) => p.id !== id),
     }));
+    runApiMutation('excluir matéria/pauta', () => newsApi.remove(id), {
+      onRollback: () => setState((prev) => ({ ...prev, pautas: prevPautas })),
+    });
   };
 
   const chiefEditorApprovePauta = (id: string, chiefName: string, publishNow = false) => {
     const nowLabel = formatNow();
+    const prevPautas = stateRef.current.pautas;
+    const current = prevPautas.find((p) => p.id === id);
+    const patch: Partial<EditorialPauta> = {
+      approvalStatus: publishNow ? 'Publicada no Site' : 'Aprovada pelo Redator-Chefe',
+      status: publishNow ? 'Publicado' : current?.status,
+      approvedBy: `${chiefName} (Editor-Chefe)`,
+      publishedAt: publishNow ? nowLabel : current?.publishedAt,
+    };
     setState((prev) => ({
       ...prev,
-      pautas: prev.pautas.map((p) =>
-        p.id === id
-          ? {
-              ...p,
-              approvalStatus: publishNow
-                ? 'Publicada no Site'
-                : 'Aprovada pelo Redator-Chefe',
-              status: publishNow ? 'Publicado' : p.status,
-              approvedBy: `${chiefName} (Editor-Chefe)`,
-              publishedAt: publishNow ? nowLabel : p.publishedAt,
-            }
-          : p
-      ),
+      pautas: prev.pautas.map((p) => (p.id === id ? { ...p, ...patch } : p)),
     }));
+    runApiMutation('aprovar matéria/pauta', () => newsApi.update(id, patch), {
+      onRollback: () => setState((prev) => ({ ...prev, pautas: prevPautas })),
+    });
   };
 
   const publishPautaToSite = (id: string) => {
     const nowLabel = formatNow();
+    const prevPautas = stateRef.current.pautas;
+    const patch: Partial<EditorialPauta> = {
+      approvalStatus: 'Publicada no Site',
+      status: 'Publicado',
+      publishedAt: nowLabel,
+    };
     setState((prev) => ({
       ...prev,
-      pautas: prev.pautas.map((p) =>
-        p.id === id
-          ? {
-              ...p,
-              approvalStatus: 'Publicada no Site',
-              status: 'Publicado',
-              publishedAt: nowLabel,
-            }
-          : p
-      ),
+      pautas: prev.pautas.map((p) => (p.id === id ? { ...p, ...patch } : p)),
     }));
+    runApiMutation('publicar matéria no portal', () => newsApi.update(id, patch), {
+      onRollback: () => setState((prev) => ({ ...prev, pautas: prevPautas })),
+    });
   };
 
   const unpublishPauta = (id: string) => {
+    const prevPautas = stateRef.current.pautas;
+    const patch: Partial<EditorialPauta> = {
+      approvalStatus: 'Aguardando Redator-Chefe',
+      status: 'Edição & Cortes',
+    };
     setState((prev) => ({
       ...prev,
-      pautas: prev.pautas.map((p) =>
-        p.id === id
-          ? {
-              ...p,
-              approvalStatus: 'Aguardando Redator-Chefe',
-              status: 'Edição & Cortes',
-            }
-          : p
-      ),
+      pautas: prev.pautas.map((p) => (p.id === id ? { ...p, ...patch } : p)),
     }));
+    runApiMutation('despublicar matéria', () => newsApi.update(id, patch), {
+      onRollback: () => setState((prev) => ({ ...prev, pautas: prevPautas })),
+    });
   };
 
   const parseHourDecimal = (hhmm: string) => {
@@ -978,60 +1473,95 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   /* Gestão de Publicidade */
   const addAdvertisingCampaign = (campaign: Omit<AdvertisingCampaign, 'id'>) => {
+    const created: AdvertisingCampaign = { ...campaign, id: `adv-${Date.now()}` };
+    const prevCampaigns = stateRef.current.advertisingCampaigns;
     setState((prev) => ({
       ...prev,
-      advertisingCampaigns: [
-        { ...campaign, id: `adv-${Date.now()}` },
-        ...prev.advertisingCampaigns,
-      ],
+      advertisingCampaigns: [created, ...prev.advertisingCampaigns],
     }));
+    runApiMutation('criar campanha publicitária', () => campaignsApi.createCampaign(created), {
+      onRollback: () => setState((prev) => ({ ...prev, advertisingCampaigns: prevCampaigns })),
+    });
   };
 
   const updateAdvertisingStatus = (id: string, status: AdvertisingStatus) => {
+    const prevCampaigns = stateRef.current.advertisingCampaigns;
     setState((prev) => ({
       ...prev,
       advertisingCampaigns: prev.advertisingCampaigns.map((c) =>
         c.id === id ? { ...c, status } : c
       ),
     }));
+    runApiMutation(
+      'atualizar status da campanha',
+      () => campaignsApi.updateCampaign(id, { status }),
+      {
+        onRollback: () => setState((prev) => ({ ...prev, advertisingCampaigns: prevCampaigns })),
+      }
+    );
   };
 
   const updateArtworkStatus = (id: string, artworkStatus: ArtworkStatus) => {
+    const prevCampaigns = stateRef.current.advertisingCampaigns;
     setState((prev) => ({
       ...prev,
       advertisingCampaigns: prev.advertisingCampaigns.map((c) =>
         c.id === id ? { ...c, artworkStatus } : c
       ),
     }));
+    runApiMutation(
+      'atualizar status de arte da campanha',
+      () => campaignsApi.updateCampaign(id, { artworkStatus }),
+      {
+        onRollback: () => setState((prev) => ({ ...prev, advertisingCampaigns: prevCampaigns })),
+      }
+    );
   };
 
   const deleteAdvertisingCampaign = (id: string) => {
+    const prevCampaigns = stateRef.current.advertisingCampaigns;
     setState((prev) => ({
       ...prev,
       advertisingCampaigns: prev.advertisingCampaigns.filter((c) => c.id !== id),
     }));
+    runApiMutation('excluir campanha publicitária', () => campaignsApi.deleteCampaign(id), {
+      onRollback: () => setState((prev) => ({ ...prev, advertisingCampaigns: prevCampaigns })),
+    });
   };
 
   /* Financeiro de Agência */
   const addFinancialEntry = (entry: Omit<FinancialEntry, 'id'>) => {
+    const created: FinancialEntry = { ...entry, id: `fin-${Date.now()}` };
+    const prevEntries = stateRef.current.financialEntries;
     setState((prev) => ({
       ...prev,
-      financialEntries: [{ ...entry, id: `fin-${Date.now()}` }, ...prev.financialEntries],
+      financialEntries: [created, ...prev.financialEntries],
     }));
+    runApiMutation('criar lançamento financeiro', () => financeApi.create(created), {
+      onRollback: () => setState((prev) => ({ ...prev, financialEntries: prevEntries })),
+    });
   };
 
   const updateFinancialStatus = (id: string, status: FinancialPaymentStatus) => {
+    const prevEntries = stateRef.current.financialEntries;
     setState((prev) => ({
       ...prev,
       financialEntries: prev.financialEntries.map((f) => (f.id === id ? { ...f, status } : f)),
     }));
+    runApiMutation('atualizar status financeiro', () => financeApi.update(id, { status }), {
+      onRollback: () => setState((prev) => ({ ...prev, financialEntries: prevEntries })),
+    });
   };
 
   const deleteFinancialEntry = (id: string) => {
+    const prevEntries = stateRef.current.financialEntries;
     setState((prev) => ({
       ...prev,
       financialEntries: prev.financialEntries.filter((f) => f.id !== id),
     }));
+    runApiMutation('excluir lançamento financeiro', () => financeApi.remove(id), {
+      onRollback: () => setState((prev) => ({ ...prev, financialEntries: prevEntries })),
+    });
   };
 
   /* Orçamento & Plano de Mídia */
@@ -1181,6 +1711,16 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       ),
     }));
 
+    for (const c of newCampaigns) {
+      runApiMutation('criar campanha gerada do orçamento', () => campaignsApi.createCampaign(c));
+    }
+    for (const f of newEntries) {
+      runApiMutation('criar parcela financeira do orçamento', () => financeApi.create(f));
+    }
+    for (const t of newClientTasks) {
+      runApiMutation('criar tarefa do cliente gerada do orçamento', () => crmApi.createTask(t));
+    }
+
     return { campaignsCreated: newCampaigns.length, entriesCreated: newEntries.length };
   };
 
@@ -1207,24 +1747,37 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const addOutdoorPoint = (point: Omit<OutdoorPoint, 'id'>) => {
+    const created: OutdoorPoint = { ...point, id: `out-${Date.now()}` };
+    const prevPoints = stateRef.current.outdoorPoints;
     setState((prev) => ({
       ...prev,
-      outdoorPoints: [{ ...point, id: `out-${Date.now()}` }, ...prev.outdoorPoints],
+      outdoorPoints: [created, ...prev.outdoorPoints],
     }));
+    runApiMutation('criar ponto de outdoor', () => campaignsApi.createOutdoor(created), {
+      onRollback: () => setState((prev) => ({ ...prev, outdoorPoints: prevPoints })),
+    });
   };
 
   const updateOutdoorPoint = (id: string, patch: Partial<OutdoorPoint>) => {
+    const prevPoints = stateRef.current.outdoorPoints;
     setState((prev) => ({
       ...prev,
       outdoorPoints: prev.outdoorPoints.map((o) => (o.id === id ? { ...o, ...patch } : o)),
     }));
+    runApiMutation('atualizar ponto de outdoor', () => campaignsApi.updateOutdoor(id, patch), {
+      onRollback: () => setState((prev) => ({ ...prev, outdoorPoints: prevPoints })),
+    });
   };
 
   const deleteOutdoorPoint = (id: string) => {
+    const prevPoints = stateRef.current.outdoorPoints;
     setState((prev) => ({
       ...prev,
       outdoorPoints: prev.outdoorPoints.filter((o) => o.id !== id),
     }));
+    runApiMutation('excluir ponto de outdoor', () => campaignsApi.deleteOutdoor(id), {
+      onRollback: () => setState((prev) => ({ ...prev, outdoorPoints: prevPoints })),
+    });
   };
 
   /* Equipe & Pessoas */
@@ -1234,20 +1787,30 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       id: `usr-${Date.now()}`,
       createdAt: new Date().toLocaleDateString('pt-BR'),
     };
+    const prevMembers = stateRef.current.teamMembers;
     setState((prev) => ({
       ...prev,
       teamMembers: [newMember, ...prev.teamMembers],
     }));
+    runApiMutation('criar usuário', () => usersApi.create(newMember), {
+      onRollback: () => setState((prev) => ({ ...prev, teamMembers: prevMembers })),
+    });
   };
 
   const updateTeamMember = (id: string, patch: Partial<TeamMember>) => {
+    const prevMembers = stateRef.current.teamMembers;
     setState((prev) => ({
       ...prev,
       teamMembers: prev.teamMembers.map((m) => (m.id === id ? { ...m, ...patch } : m)),
     }));
+    runApiMutation('atualizar usuário', () => usersApi.update(id, patch), {
+      onRollback: () => setState((prev) => ({ ...prev, teamMembers: prevMembers })),
+    });
   };
 
   const deleteTeamMember = (id: string) => {
+    const prevMembers = stateRef.current.teamMembers;
+    const prevActive = stateRef.current.activeAdminUserId;
     setState((prev) => ({
       ...prev,
       teamMembers: prev.teamMembers.filter((m) => m.id !== id),
@@ -1256,6 +1819,14 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           ? (prev.teamMembers.find((m) => m.id !== id)?.id ?? '')
           : prev.activeAdminUserId,
     }));
+    runApiMutation('excluir usuário', () => usersApi.remove(id), {
+      onRollback: () =>
+        setState((prev) => ({
+          ...prev,
+          teamMembers: prevMembers,
+          activeAdminUserId: prevActive,
+        })),
+    });
   };
 
   const setActiveAdminUserId = (id: string) => {
@@ -1326,34 +1897,59 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       id: `tsk-${Date.now()}`,
       updatedAt: formatNow(),
     };
+    const prevTasks = stateRef.current.clientTasks;
     setState((prev) => ({
       ...prev,
       clientTasks: [newTask, ...prev.clientTasks],
     }));
+    runApiMutation('criar tarefa do pipeline', () => crmApi.createTask(newTask), {
+      onRollback: () => setState((prev) => ({ ...prev, clientTasks: prevTasks })),
+    });
   };
 
   const updateClientTask = (id: string, patch: Partial<ClientServiceTask>) => {
     const now = formatNow();
+    const prevTasks = stateRef.current.clientTasks;
     setState((prev) => ({
       ...prev,
       clientTasks: prev.clientTasks.map((t) =>
         t.id === id ? { ...t, ...patch, updatedAt: now } : t
       ),
     }));
+    runApiMutation(
+      'atualizar tarefa do pipeline',
+      () => crmApi.updateTask(id, { ...patch, updatedAt: now }),
+      {
+        onRollback: () => setState((prev) => ({ ...prev, clientTasks: prevTasks })),
+      }
+    );
   };
 
   const moveClientTaskStage = (id: string, stage: ClientKanbanStage) => {
     const now = formatNow();
+    const prevTasks = stateRef.current.clientTasks;
     setState((prev) => ({
       ...prev,
       clientTasks: prev.clientTasks.map((t) =>
         t.id === id ? { ...t, stage, updatedAt: now } : t
       ),
     }));
+    runApiMutation(
+      'mover etapa da tarefa',
+      () => crmApi.updateTask(id, { stage, updatedAt: now }),
+      {
+        onRollback: () => setState((prev) => ({ ...prev, clientTasks: prevTasks })),
+      }
+    );
   };
 
   const toggleClientChecklistItem = (taskId: string, checklistId: string) => {
     const now = formatNow();
+    const prevTasks = stateRef.current.clientTasks;
+    const target = prevTasks.find((t) => t.id === taskId);
+    const updatedChecklist = target
+      ? target.checklist.map((c) => (c.id === checklistId ? { ...c, done: !c.done } : c))
+      : undefined;
     setState((prev) => ({
       ...prev,
       clientTasks: prev.clientTasks.map((t) =>
@@ -1368,13 +1964,26 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           : t
       ),
     }));
+    if (updatedChecklist) {
+      runApiMutation(
+        'atualizar checklist da tarefa',
+        () => crmApi.updateTask(taskId, { checklist: updatedChecklist, updatedAt: now }),
+        {
+          onRollback: () => setState((prev) => ({ ...prev, clientTasks: prevTasks })),
+        }
+      );
+    }
   };
 
   const deleteClientTask = (id: string) => {
+    const prevTasks = stateRef.current.clientTasks;
     setState((prev) => ({
       ...prev,
       clientTasks: prev.clientTasks.filter((t) => t.id !== id),
     }));
+    runApiMutation('excluir tarefa do pipeline', () => crmApi.deleteTask(id), {
+      onRollback: () => setState((prev) => ({ ...prev, clientTasks: prevTasks })),
+    });
   };
 
   /* CMS Completo */
@@ -2190,15 +2799,21 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const assignPautaToReporter = (pautaId: string, reporterId: string | null) => {
+    const prevPautas = stateRef.current.pautas;
+    const rep = reporterId
+      ? stateRef.current.reporters.find((r) => r.id === reporterId)
+      : null;
+    const assignedReporterId = rep ? rep.id : undefined;
+    const reporterName = rep ? rep.name : 'Redação Central FortNews';
+
     setState((prev) => {
-      const rep = reporterId ? prev.reporters.find((r) => r.id === reporterId) : null;
       const targetPauta = prev.pautas.find((p) => p.id === pautaId);
       const nextPautas = prev.pautas.map((p) =>
         p.id === pautaId
           ? {
               ...p,
-              assignedReporterId: rep ? rep.id : undefined,
-              reporter: rep ? rep.name : 'Redação Central FortNews',
+              assignedReporterId,
+              reporter: reporterName,
             }
           : p
       );
@@ -2227,6 +2842,14 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         notifications: nextNotifications,
       };
     });
+
+    runApiMutation(
+      'distribuir pauta para repórter',
+      () => newsApi.update(pautaId, { assignedReporterId, reporter: reporterName }),
+      {
+        onRollback: () => setState((prev) => ({ ...prev, pautas: prevPautas })),
+      }
+    );
   };
 
   /* ---------------- FONTES JORNALÍSTICAS (SIGILO ESTRITO) ---------------- */
@@ -2472,6 +3095,14 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         updateSiteAdBanner,
         deleteSiteAdBanner,
         updateSiteAdsConfig,
+        apiMode,
+        apiSyncLoading,
+        apiSyncError,
+        apiSyncMessage,
+        isDatabaseEmpty,
+        clearApiFeedback,
+        refreshFromMysql,
+        syncInitialDataToMysql,
         resetDemoData,
       }}
     >

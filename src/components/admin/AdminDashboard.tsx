@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   BarChart3,
   Bell,
@@ -9,6 +10,8 @@ import {
   Calendar,
   CalendarClock,
   Check,
+  CheckCircle2,
+  Database,
   DollarSign,
   FileText,
   Globe,
@@ -22,6 +25,7 @@ import {
   Newspaper,
   Package,
   Palette,
+  RefreshCw,
   RotateCcw,
   ScrollText,
   Sliders,
@@ -103,6 +107,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setActiveAdminUserId,
     notifications,
     siteSettings,
+    apiMode,
+    apiSyncLoading,
+    apiSyncError,
+    apiSyncMessage,
+    isDatabaseEmpty,
+    clearApiFeedback,
+    refreshFromMysql,
+    syncInitialDataToMysql,
     resetDemoData,
   } = useFortMidia();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -199,22 +211,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const apiLogin = await authApi.login(rawUsername.trim(), password);
     if (apiLogin.ok && apiLogin.data?.user) {
       const apiUser = apiLogin.data.user;
-      const matchedLocal = teamMembers.find(
-        (m) => m.id === apiUser.id || m.email.toLowerCase() === apiUser.email.toLowerCase()
-      );
-      if (matchedLocal) {
-        setActiveAdminUserId(matchedLocal.id);
-      }
+      setActiveAdminUserId(apiUser.id);
+      await refreshFromMysql(apiUser);
       setIsAuthenticated(true);
       return null;
     }
 
-    // Se a API respondeu explicitamente 401/403 (credenciais inválidas no MySQL), retorna erro real
-    if (!apiLogin.networkUnavailable && (apiLogin.status === 401 || apiLogin.status === 403)) {
+    // Se a API está online (/api/health ok) ou respondeu com erro HTTP real (401/403/500),
+    // nunca faz fallback silencioso para credenciais de demonstração locais.
+    if (apiMode === 'online' || !apiLogin.networkUnavailable) {
       return apiLogin.error || 'Usuário ou senha inválidos.';
     }
 
-    // 2. Fallback automático para ambiente local/preview sem backend PHP montado
+    // 2. Fallback automático apenas em ambiente offline/preview sem backend PHP disponível
     const matchedMember = teamMembers.find((m) => {
       const email = m.email.toLowerCase();
       const emailPrefix = email.split('@')[0];
@@ -340,14 +349,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               Portal FortNews
             </button>
           )}
-          <button
-            type="button"
-            onClick={resetDemoData}
-            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-zinc-400 hover:bg-white/[0.04] hover:text-white cursor-pointer"
-          >
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-            Restaurar Dados Base
-          </button>
+          {apiMode === 'online' ? (
+            <>
+              <button
+                type="button"
+                disabled={apiSyncLoading}
+                onClick={() => void refreshFromMysql()}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-zinc-300 hover:bg-white/[0.04] hover:text-white disabled:opacity-50 cursor-pointer"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${apiSyncLoading ? 'animate-spin' : ''}`}
+                  aria-hidden="true"
+                />
+                Recarregar do MySQL
+              </button>
+              {isSuperAdmin && (
+                <button
+                  type="button"
+                  disabled={apiSyncLoading}
+                  onClick={() => void syncInitialDataToMysql()}
+                  className="flex w-full items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 cursor-pointer text-left"
+                >
+                  <Database className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span className="truncate">Sincronizar dados iniciais</span>
+                </button>
+              )}
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={resetDemoData}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-zinc-400 hover:bg-white/[0.04] hover:text-white cursor-pointer"
+            >
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+              Restaurar Dados Base
+            </button>
+          )}
           <button
             type="button"
             onClick={onBackToPortal}
@@ -456,7 +493,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setIsAuthenticated(false)}
+              onClick={() => {
+                void authApi.logout();
+                clearApiFeedback();
+                setIsAuthenticated(false);
+              }}
               className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5 cursor-pointer"
             >
               Sair
@@ -540,6 +581,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     Portal FortNews
                   </button>
                 )}
+                {apiMode === 'online' && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={apiSyncLoading}
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        void refreshFromMysql();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-zinc-200 disabled:opacity-50 cursor-pointer"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${apiSyncLoading ? 'animate-spin' : ''}`} />
+                      Recarregar do MySQL
+                    </button>
+                    {isSuperAdmin && (
+                      <button
+                        type="button"
+                        disabled={apiSyncLoading}
+                        onClick={() => {
+                          setMobileMenuOpen(false);
+                          void syncInitialDataToMysql();
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300 disabled:opacity-50 cursor-pointer"
+                      >
+                        <Database className="h-3.5 w-3.5" />
+                        Sincronizar dados iniciais com o MySQL
+                      </button>
+                    )}
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -564,6 +635,96 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {/* Active Workspace Viewport */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto print-container-reset">
+          {/* Alerta Visual de Erro da API PHP/MySQL */}
+          {apiSyncError && (
+            <div
+              role="alert"
+              className="no-print mb-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-red-500/40 bg-red-950/50 px-4 py-3 text-xs text-red-100"
+            >
+              <div className="flex items-start gap-2.5 min-w-0">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-red-400 mt-0.5" aria-hidden="true" />
+                <div className="min-w-0">
+                  <div className="font-semibold text-red-200">
+                    Falha ao sincronizar operação com o MySQL
+                  </div>
+                  <p className="mt-0.5 text-red-100/90 break-words">{apiSyncError}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={apiSyncLoading}
+                  onClick={() => void refreshFromMysql()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-400/40 bg-red-500/20 px-3 py-1.5 text-[11px] font-medium text-red-100 hover:bg-red-500/30 disabled:opacity-50 cursor-pointer"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${apiSyncLoading ? 'animate-spin' : ''}`} />
+                  Recarregar do MySQL
+                </button>
+                <button
+                  type="button"
+                  onClick={clearApiFeedback}
+                  aria-label="Fechar alerta de erro"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-red-400/30 text-red-200 hover:bg-red-500/20 cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Confirmação Visual de Sincronização com o MySQL */}
+          {apiSyncMessage && !apiSyncError && (
+            <div
+              role="status"
+              className="no-print mb-5 flex items-center justify-between gap-3 rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-4 py-3 text-xs text-emerald-100"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
+                <p className="break-words">{apiSyncMessage}</p>
+              </div>
+              <button
+                type="button"
+                onClick={clearApiFeedback}
+                aria-label="Fechar aviso"
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-emerald-400/30 text-emerald-200 hover:bg-emerald-500/20 cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Ação de Primeiro Acesso quando o Banco MySQL está Vazio */}
+          {apiMode === 'online' && isDatabaseEmpty && isSuperAdmin && (
+            <div className="no-print mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 rounded-xl border border-[#fa6607]/40 bg-[#141110] p-4 sm:p-5">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#fa6607]/15 text-[#fa6607]">
+                  <Database className="h-5 w-5" aria-hidden="true" />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-sm font-semibold text-white">
+                    Banco MySQL conectado e pronto para primeiro uso
+                  </h2>
+                  <p className="mt-1 text-xs text-zinc-400">
+                    As tabelas <code className="text-zinc-200">crm_contracts</code>,{' '}
+                    <code className="text-zinc-200">crm_leads</code> e{' '}
+                    <code className="text-zinc-200">news_pautas</code> estão vazias no MySQL. Você pode começar cadastrando manualmente ou popular os registros iniciais com um clique.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={apiSyncLoading}
+                onClick={() => void syncInitialDataToMysql()}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
+              >
+                <Database className="h-4 w-4" aria-hidden="true" />
+                {apiSyncLoading
+                  ? 'Sincronizando com MySQL...'
+                  : 'Sincronizar dados iniciais com o MySQL'}
+              </button>
+            </div>
+          )}
+
           {resolvedTab === 'cockpit' && (
             <CockpitModule
               onNavigateTab={(tab) => setActiveTab(tab)}

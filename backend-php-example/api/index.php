@@ -9,6 +9,9 @@ declare(strict_types=1);
  * - Autenticação por Bearer Token armazenado como hash SHA-256 na tabela `user_sessions`
  * - Senhas armazenadas exclusivamente com password_hash (bcrypt)
  * - CORS restrito a fortmidia.com.br, fortnews.com.br e jornalfortnews.com.br
+ * - CRUD completo no MySQL para contratos, leads, pipeline, matérias/pautas, financeiro,
+ *   campanhas, outdoors, demandas cidadãs e usuários
+ * - Rotina POST /api/sync/seed para popular dados iniciais com 1 clique
  * - Proxy /api/ai lendo GEMINI_API_KEY apenas no servidor
  */
 
@@ -47,7 +50,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
 }
 
 // ----------------------------------------------------------------------------
-// 2. Utilitários de Resposta, Entrada & PDO
+// 2. Utilitários de Resposta, Entrada, PDO & Introspecção Segura de Colunas
 // ----------------------------------------------------------------------------
 function jsonResponse(int $status, array $payload): never
 {
@@ -95,6 +98,117 @@ function getPdo(array $config): PDO
     } catch (Throwable) {
         jsonResponse(503, ['error' => 'Não foi possível conectar ao banco de dados MySQL.']);
     }
+}
+
+/**
+ * Retorna os nomes de colunas disponíveis na tabela (whitelist contra SQL injection
+ * e compatibilidade retroativa com bancos que ainda não rodaram os ALTER TABLE opcionais).
+ */
+function getTableColumns(PDO $pdo, string $table): array
+{
+    static $cache = [];
+    if (isset($cache[$table])) {
+        return $cache[$table];
+    }
+
+    $allowedTables = [
+        'users',
+        'user_sessions',
+        'news_pautas',
+        'crm_leads',
+        'crm_contracts',
+        'crm_client_tasks',
+        'financial_entries',
+        'campaigns',
+        'outdoor_points',
+        'citizen_reports',
+        'app_state_snapshots',
+    ];
+    if (!in_array($table, $allowedTables, true)) {
+        return [];
+    }
+
+    try {
+        $rows = $pdo->query('SHOW COLUMNS FROM `' . $table . '`')->fetchAll();
+        $cols = [];
+        foreach ($rows as $row) {
+            if (isset($row['Field'])) {
+                $cols[(string) $row['Field']] = true;
+            }
+        }
+        $cache[$table] = $cols;
+        return $cols;
+    } catch (Throwable) {
+        $cache[$table] = [];
+        return [];
+    }
+}
+
+function insertFilteredRow(PDO $pdo, string $table, array $data, bool $ignore = false): int
+{
+    $columns = getTableColumns($pdo, $table);
+    if ($columns === []) {
+        throw new RuntimeException("Tabela {$table} indisponível no banco MySQL.");
+    }
+
+    $fields = [];
+    $placeholders = [];
+    $params = [];
+
+    foreach ($data as $col => $value) {
+        if (!isset($columns[$col])) {
+            continue;
+        }
+        $fields[] = '`' . $col . '`';
+        $param = ':p_' . $col;
+        $placeholders[] = $param;
+        $params[$param] = $value;
+    }
+
+    if ($fields === []) {
+        return 0;
+    }
+
+    $keyword = $ignore ? 'INSERT IGNORE INTO' : 'INSERT INTO';
+    $sql = sprintf(
+        '%s `%s` (%s) VALUES (%s)',
+        $keyword,
+        $table,
+        implode(', ', $fields),
+        implode(', ', $placeholders)
+    );
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->rowCount();
+}
+
+function updateFilteredRow(PDO $pdo, string $table, string $id, array $data): int
+{
+    $columns = getTableColumns($pdo, $table);
+    if ($columns === []) {
+        throw new RuntimeException("Tabela {$table} indisponível no banco MySQL.");
+    }
+
+    $sets = [];
+    $params = [':where_id' => $id];
+
+    foreach ($data as $col => $value) {
+        if ($col === 'id' || !isset($columns[$col])) {
+            continue;
+        }
+        $param = ':u_' . $col;
+        $sets[] = '`' . $col . '` = ' . $param;
+        $params[$param] = $value;
+    }
+
+    if ($sets === []) {
+        return 0;
+    }
+
+    $sql = sprintf('UPDATE `%s` SET %s WHERE `id` = :where_id', $table, implode(', ', $sets));
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->rowCount();
 }
 
 function extractBearerToken(): ?string
@@ -163,6 +277,21 @@ function requireAdmin(PDO $pdo): array
     return $user;
 }
 
+// ----------------------------------------------------------------------------
+// 3. Formatadores Canônicos (MySQL snake_case -> Frontend camelCase)
+// ----------------------------------------------------------------------------
+function decodeJsonField(mixed $raw, mixed $fallback): mixed
+{
+    if (is_array($raw)) {
+        return $raw;
+    }
+    if (!is_string($raw) || trim($raw) === '') {
+        return $fallback;
+    }
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : $fallback;
+}
+
 function formatUserRow(array $row): array
 {
     return [
@@ -175,15 +304,564 @@ function formatUserRow(array $row): array
         'phone' => (string) ($row['phone'] ?? ''),
         'avatarUrl' => (string) ($row['avatar_url'] ?? ''),
         'bio' => (string) ($row['bio'] ?? ''),
-        'linkedClientName' => $row['linked_client_name'] ?: null,
-        'allowedModules' => json_decode((string) ($row['allowed_modules_json'] ?? '[]'), true) ?: [],
-        'permissions' => json_decode((string) ($row['permissions_json'] ?? '{}'), true) ?: [],
+        'linkedClientName' => !empty($row['linked_client_name']) ? (string) $row['linked_client_name'] : null,
+        'allowedModules' => decodeJsonField($row['allowed_modules_json'] ?? null, []),
+        'permissions' => decodeJsonField($row['permissions_json'] ?? null, []),
         'active' => (bool) $row['active'],
     ];
 }
 
+function formatPautaRow(array $row): array
+{
+    $item = [
+        'id' => (string) $row['id'],
+        'title' => (string) ($row['title'] ?? ''),
+        'city' => (string) ($row['city'] ?? 'Regional CIMBAJU'),
+        'seal' => (string) ($row['seal'] ?? 'Geral'),
+        'format' => (string) ($row['format'] ?? 'Portal 24/7'),
+        'reporter' => (string) ($row['reporter'] ?? 'Redação FortNews'),
+        'deadline' => (string) ($row['deadline'] ?? ''),
+        'status' => (string) ($row['status'] ?? 'Apuração de Rua'),
+        'approvalStatus' => (string) ($row['approval_status'] ?? 'Aguardando Redator-Chefe'),
+        'summary' => (string) ($row['summary'] ?? ''),
+        'body' => (string) ($row['body'] ?? ''),
+        'imageUrl' => (string) ($row['image_url'] ?? ''),
+        'mediaType' => (string) ($row['media_type'] ?? 'image'),
+        'videoUrl' => !empty($row['video_url']) ? (string) $row['video_url'] : null,
+        'sourceProtocol' => !empty($row['source_protocol']) ? (string) $row['source_protocol'] : null,
+        'approvedBy' => !empty($row['approved_by']) ? (string) $row['approved_by'] : null,
+        'publishedAt' => !empty($row['published_at']) ? (string) $row['published_at'] : null,
+        'aiGenerated' => !empty($row['ai_generated']),
+        'sourceUrls' => decodeJsonField($row['source_urls_json'] ?? null, []),
+        'socialCreative' => decodeJsonField($row['social_creative_json'] ?? null, null),
+    ];
+    if (isset($row['internal_code']) && $row['internal_code'] !== null && $row['internal_code'] !== '') {
+        $item['internalCode'] = (string) $row['internal_code'];
+    }
+    if (!empty($row['assigned_reporter_id'])) {
+        $item['assignedReporterId'] = (string) $row['assigned_reporter_id'];
+    }
+    return $item;
+}
+
+function formatLeadRow(array $row): array
+{
+    return [
+        'id' => (string) $row['id'],
+        'companyOrName' => (string) ($row['company_or_name'] ?? ''),
+        'contact' => (string) ($row['contact'] ?? ''),
+        'city' => (string) ($row['city'] ?? 'Franco da Rocha'),
+        'quotaTitle' => (string) ($row['quota_title'] ?? ''),
+        'notes' => (string) ($row['notes'] ?? ''),
+        'status' => (string) ($row['status'] ?? 'Novo Lead'),
+        'createdAt' => (string) ($row['created_at_label'] ?? $row['created_at'] ?? ''),
+    ];
+}
+
+function formatContractRow(array $row): array
+{
+    return [
+        'id' => (string) $row['id'],
+        'clientName' => (string) ($row['client'] ?? ''),
+        'segment' => (string) ($row['segment'] ?? 'Comércio Local'),
+        'pillar' => (string) ($row['pillar'] ?? 'Combo 360°'),
+        'city' => (string) ($row['city'] ?? 'Franco da Rocha'),
+        'planName' => (string) ($row['product'] ?? ''),
+        'monthlyValue' => (float) ($row['monthly_value'] ?? 0),
+        'origin' => (string) ($row['origin'] ?? 'Captação da Casa (100%)'),
+        'oohPoint' => !empty($row['ooh_point']) ? (string) $row['ooh_point'] : null,
+        'status' => (string) ($row['status'] ?? 'Ativo'),
+        'startDate' => (string) ($row['start_date'] ?? ''),
+        'endDate' => (string) ($row['end_date'] ?? ''),
+        'impressionsEstimate' => (string) ($row['impressions_estimate'] ?? ''),
+    ];
+}
+
+function formatTaskRow(array $row): array
+{
+    return [
+        'id' => (string) $row['id'],
+        'accessCode' => (string) ($row['access_code'] ?? ''),
+        'clientName' => (string) ($row['client_name'] ?? ''),
+        'title' => (string) ($row['campaign_title'] ?? ''),
+        'serviceType' => (string) ($row['service_type'] ?? 'Combo 360°'),
+        'city' => (string) ($row['city'] ?? 'Franco da Rocha'),
+        'stage' => (string) ($row['stage'] ?? 'Briefing & Material'),
+        'priority' => (string) ($row['priority'] ?? 'Normal'),
+        'dueDate' => (string) ($row['due_date'] ?? ''),
+        'assigneeName' => (string) ($row['assignee'] ?? ''),
+        'assigneeAvatar' => (string) ($row['assignee_avatar'] ?? ''),
+        'description' => (string) ($row['client_notes'] ?? ''),
+        'clientFeedback' => !empty($row['client_feedback']) ? (string) $row['client_feedback'] : null,
+        'outdoorCode' => !empty($row['outdoor_code']) ? (string) $row['outdoor_code'] : null,
+        'checklist' => decodeJsonField($row['checklist_json'] ?? null, []),
+        'updatedAt' => (string) ($row['updated_at_label'] ?? $row['updated_at'] ?? ''),
+    ];
+}
+
+function formatFinancialRow(array $row): array
+{
+    return [
+        'id' => (string) $row['id'],
+        'type' => (string) ($row['type'] ?? 'Receita'),
+        'description' => (string) ($row['description'] ?? ''),
+        'counterpartyName' => (string) ($row['counterparty_name'] ?? $row['client_or_vendor'] ?? ''),
+        'counterpartyRole' => (string) ($row['counterparty_role'] ?? 'Anunciante / Cliente'),
+        'costCenter' => (string) ($row['cost_center'] ?? $row['category'] ?? 'Operações FortMídia'),
+        'dueDate' => (string) ($row['due_date'] ?? ''),
+        'amount' => (float) ($row['amount'] ?? 0),
+        'status' => (string) ($row['status'] ?? 'Pendente'),
+        'paymentMethod' => (string) ($row['payment_method'] ?? 'PIX'),
+        'invoiceRef' => !empty($row['invoice_ref'] ?? $row['reference_code'] ?? null)
+            ? (string) ($row['invoice_ref'] ?? $row['reference_code'])
+            : null,
+    ];
+}
+
+function formatCampaignRow(array $row): array
+{
+    return [
+        'id' => (string) $row['id'],
+        'advertiser' => (string) ($row['advertiser'] ?? ''),
+        'title' => (string) ($row['title'] ?? ''),
+        'adType' => (string) ($row['ad_type'] ?? 'Patrocínio'),
+        'city' => (string) ($row['city'] ?? 'Franco da Rocha'),
+        'placementSpec' => (string) ($row['placement_spec'] ?? ''),
+        'startDate' => (string) ($row['start_date'] ?? ''),
+        'endDate' => (string) ($row['end_date'] ?? ''),
+        'value' => (float) ($row['contract_value'] ?? 0),
+        'status' => (string) ($row['status'] ?? 'Programada'),
+        'artworkStatus' => (string) ($row['artwork_status'] ?? 'Aguardando Material'),
+        'accountManager' => (string) ($row['account_manager'] ?? 'Comercial FortMídia'),
+    ];
+}
+
+function formatOutdoorRow(array $row): array
+{
+    return [
+        'id' => (string) $row['id'],
+        'code' => (string) ($row['code'] ?? ''),
+        'title' => (string) ($row['location_name'] ?? ''),
+        'address' => (string) ($row['address_reference'] ?? ''),
+        'city' => (string) ($row['city'] ?? 'Franco da Rocha'),
+        'lat' => (float) ($row['lat'] ?? -23.3219),
+        'lng' => (float) ($row['lng'] ?? -46.7272),
+        'dimensions' => (string) ($row['dimensions'] ?? '9,00m x 3,00m'),
+        'lighting' => (string) ($row['lighting'] ?? 'Iluminado (Frontlight)'),
+        'bimonthlyPrice' => (float) ($row['biweekly_rate'] ?? $row['monthly_rate'] ?? 1350),
+        'availability' => (string) ($row['availability'] ?? 'Disponível'),
+        'currentAdvertiser' => !empty($row['current_advertiser']) ? (string) $row['current_advertiser'] : null,
+        'availableFrom' => !empty($row['occupied_until']) ? (string) $row['occupied_until'] : null,
+        'notes' => !empty($row['notes']) ? (string) $row['notes'] : null,
+    ];
+}
+
+function formatCitizenReportRow(array $row): array
+{
+    return [
+        'id' => (string) $row['id'],
+        'protocol' => (string) ($row['protocol'] ?? ''),
+        'citizenName' => (string) ($row['citizen_name'] ?? ''),
+        'contact' => (string) ($row['contact'] ?? ''),
+        'city' => (string) ($row['city'] ?? 'Franco da Rocha'),
+        'neighborhood' => (string) ($row['neighborhood'] ?? ''),
+        'category' => (string) ($row['category'] ?? 'Zeladoria & Infraestrutura'),
+        'urgency' => (string) ($row['urgency'] ?? 'Normal'),
+        'title' => (string) ($row['title'] ?? ''),
+        'description' => (string) ($row['description'] ?? ''),
+        'status' => (string) ($row['status'] ?? 'Aguardando Triagem'),
+        'triageScore' => isset($row['triage_score']) && $row['triage_score'] !== null ? (int) $row['triage_score'] : null,
+        'assignedEditor' => !empty($row['assigned_editor']) ? (string) $row['assigned_editor'] : null,
+        'officialResponseNote' => !empty($row['official_response_note']) ? (string) $row['official_response_note'] : null,
+        'responseAuthor' => !empty($row['response_author']) ? (string) $row['response_author'] : null,
+        'responseSentAt' => !empty($row['response_sent_at']) ? (string) $row['response_sent_at'] : null,
+        'forwardedAt' => !empty($row['forwarded_at']) ? (string) $row['forwarded_at'] : null,
+        'forwardedTo' => !empty($row['forwarded_to']) ? (string) $row['forwarded_to'] : null,
+        'createdAt' => (string) ($row['created_at_label'] ?? $row['created_at'] ?? ''),
+    ];
+}
+
 // ----------------------------------------------------------------------------
-// 3. Resolução da Rota (/api/...)
+// 4. Mapeadores de Payload (Frontend -> Colunas MySQL)
+// ----------------------------------------------------------------------------
+function buildContractDbRow(array $b, bool $isCreate = false): array
+{
+    $data = [];
+    if ($isCreate) {
+        $data['id'] = trim((string) ($b['id'] ?? ('ctr-' . time())));
+        $data['client'] = trim((string) ($b['clientName'] ?? $b['client'] ?? ''));
+        $data['segment'] = trim((string) ($b['segment'] ?? 'Comércio Local'));
+        $data['pillar'] = trim((string) ($b['pillar'] ?? 'Combo 360°'));
+        $data['city'] = trim((string) ($b['city'] ?? 'Franco da Rocha'));
+        $data['product'] = trim((string) ($b['planName'] ?? $b['product'] ?? ''));
+        $data['origin'] = trim((string) ($b['origin'] ?? 'Captação da Casa'));
+        $data['owner_name'] = trim((string) ($b['ownerName'] ?? 'Comercial FortMídia'));
+        $data['ooh_point'] = isset($b['oohPoint']) && $b['oohPoint'] !== '' ? (string) $b['oohPoint'] : null;
+        $data['monthly_value'] = (float) ($b['monthlyValue'] ?? 0);
+        $data['start_date'] = (string) ($b['startDate'] ?? '');
+        $data['end_date'] = (string) ($b['endDate'] ?? '');
+        $data['impressions_estimate'] = (string) ($b['impressionsEstimate'] ?? '');
+        $data['status'] = trim((string) ($b['status'] ?? 'Ativo'));
+        return $data;
+    }
+
+    if (array_key_exists('clientName', $b) || array_key_exists('client', $b)) {
+        $data['client'] = trim((string) ($b['clientName'] ?? $b['client'] ?? ''));
+    }
+    if (array_key_exists('segment', $b)) {
+        $data['segment'] = trim((string) $b['segment']);
+    }
+    if (array_key_exists('pillar', $b)) {
+        $data['pillar'] = trim((string) $b['pillar']);
+    }
+    if (array_key_exists('city', $b)) {
+        $data['city'] = trim((string) $b['city']);
+    }
+    if (array_key_exists('planName', $b) || array_key_exists('product', $b)) {
+        $data['product'] = trim((string) ($b['planName'] ?? $b['product'] ?? ''));
+    }
+    if (array_key_exists('origin', $b)) {
+        $data['origin'] = trim((string) $b['origin']);
+    }
+    if (array_key_exists('ownerName', $b)) {
+        $data['owner_name'] = trim((string) $b['ownerName']);
+    }
+    if (array_key_exists('oohPoint', $b)) {
+        $data['ooh_point'] = $b['oohPoint'] !== null && $b['oohPoint'] !== '' ? (string) $b['oohPoint'] : null;
+    }
+    if (array_key_exists('monthlyValue', $b)) {
+        $data['monthly_value'] = (float) $b['monthlyValue'];
+    }
+    if (array_key_exists('startDate', $b)) {
+        $data['start_date'] = (string) $b['startDate'];
+    }
+    if (array_key_exists('endDate', $b)) {
+        $data['end_date'] = (string) $b['endDate'];
+    }
+    if (array_key_exists('impressionsEstimate', $b)) {
+        $data['impressions_estimate'] = (string) $b['impressionsEstimate'];
+    }
+    if (array_key_exists('status', $b)) {
+        $data['status'] = trim((string) $b['status']);
+    }
+    return $data;
+}
+
+function buildLeadDbRow(array $b, bool $isCreate = false): array
+{
+    if ($isCreate) {
+        return [
+            'id' => trim((string) ($b['id'] ?? ('lead-' . time()))),
+            'company_or_name' => trim((string) ($b['companyOrName'] ?? '')),
+            'contact' => trim((string) ($b['contact'] ?? '')),
+            'city' => trim((string) ($b['city'] ?? 'Franco da Rocha')),
+            'quota_title' => trim((string) ($b['quotaTitle'] ?? '')),
+            'notes' => (string) ($b['notes'] ?? ''),
+            'status' => trim((string) ($b['status'] ?? 'Novo Lead')),
+            'created_at_label' => (string) ($b['createdAt'] ?? date('d/m/Y · H:i')),
+        ];
+    }
+
+    $data = [];
+    if (array_key_exists('companyOrName', $b)) $data['company_or_name'] = trim((string) $b['companyOrName']);
+    if (array_key_exists('contact', $b)) $data['contact'] = trim((string) $b['contact']);
+    if (array_key_exists('city', $b)) $data['city'] = trim((string) $b['city']);
+    if (array_key_exists('quotaTitle', $b)) $data['quota_title'] = trim((string) $b['quotaTitle']);
+    if (array_key_exists('notes', $b)) $data['notes'] = (string) $b['notes'];
+    if (array_key_exists('status', $b)) $data['status'] = trim((string) $b['status']);
+    if (array_key_exists('createdAt', $b)) $data['created_at_label'] = (string) $b['createdAt'];
+    return $data;
+}
+
+function buildPautaDbRow(array $b, bool $isCreate = false): array
+{
+    if ($isCreate) {
+        return [
+            'id' => trim((string) ($b['id'] ?? ('pau-' . time()))),
+            'internal_code' => !empty($b['internalCode']) ? (string) $b['internalCode'] : null,
+            'title' => trim((string) ($b['title'] ?? 'Sem título')),
+            'city' => trim((string) ($b['city'] ?? 'Regional CIMBAJU')),
+            'seal' => trim((string) ($b['seal'] ?? 'Geral')),
+            'format' => trim((string) ($b['format'] ?? 'Portal 24/7')),
+            'reporter' => trim((string) ($b['reporter'] ?? 'Redação FortNews')),
+            'assigned_reporter_id' => !empty($b['assignedReporterId']) ? (string) $b['assignedReporterId'] : null,
+            'deadline' => (string) ($b['deadline'] ?? ''),
+            'status' => trim((string) ($b['status'] ?? 'Apuração de Rua')),
+            'approval_status' => trim((string) ($b['approvalStatus'] ?? 'Aguardando Redator-Chefe')),
+            'summary' => (string) ($b['summary'] ?? ''),
+            'body' => (string) ($b['body'] ?? ''),
+            'image_url' => (string) ($b['imageUrl'] ?? ''),
+            'media_type' => (string) ($b['mediaType'] ?? 'image'),
+            'video_url' => !empty($b['videoUrl']) ? (string) $b['videoUrl'] : null,
+            'source_protocol' => !empty($b['sourceProtocol']) ? (string) $b['sourceProtocol'] : null,
+            'approved_by' => !empty($b['approvedBy']) ? (string) $b['approvedBy'] : null,
+            'published_at' => !empty($b['publishedAt']) ? (string) $b['publishedAt'] : null,
+            'ai_generated' => !empty($b['aiGenerated']) ? 1 : 0,
+            'source_urls_json' => isset($b['sourceUrls']) ? json_encode($b['sourceUrls'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null,
+            'social_creative_json' => isset($b['socialCreative']) ? json_encode($b['socialCreative'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null,
+        ];
+    }
+
+    $data = [];
+    if (array_key_exists('internalCode', $b)) $data['internal_code'] = !empty($b['internalCode']) ? (string) $b['internalCode'] : null;
+    if (array_key_exists('title', $b)) $data['title'] = trim((string) $b['title']);
+    if (array_key_exists('city', $b)) $data['city'] = trim((string) $b['city']);
+    if (array_key_exists('seal', $b)) $data['seal'] = trim((string) $b['seal']);
+    if (array_key_exists('format', $b)) $data['format'] = trim((string) $b['format']);
+    if (array_key_exists('reporter', $b)) $data['reporter'] = trim((string) $b['reporter']);
+    if (array_key_exists('assignedReporterId', $b)) $data['assigned_reporter_id'] = !empty($b['assignedReporterId']) ? (string) $b['assignedReporterId'] : null;
+    if (array_key_exists('deadline', $b)) $data['deadline'] = (string) $b['deadline'];
+    if (array_key_exists('status', $b)) $data['status'] = trim((string) $b['status']);
+    if (array_key_exists('approvalStatus', $b)) $data['approval_status'] = trim((string) $b['approvalStatus']);
+    if (array_key_exists('summary', $b)) $data['summary'] = (string) $b['summary'];
+    if (array_key_exists('body', $b)) $data['body'] = (string) $b['body'];
+    if (array_key_exists('imageUrl', $b)) $data['image_url'] = (string) $b['imageUrl'];
+    if (array_key_exists('mediaType', $b)) $data['media_type'] = (string) $b['mediaType'];
+    if (array_key_exists('videoUrl', $b)) $data['video_url'] = !empty($b['videoUrl']) ? (string) $b['videoUrl'] : null;
+    if (array_key_exists('sourceProtocol', $b)) $data['source_protocol'] = !empty($b['sourceProtocol']) ? (string) $b['sourceProtocol'] : null;
+    if (array_key_exists('approvedBy', $b)) $data['approved_by'] = !empty($b['approvedBy']) ? (string) $b['approvedBy'] : null;
+    if (array_key_exists('publishedAt', $b)) $data['published_at'] = !empty($b['publishedAt']) ? (string) $b['publishedAt'] : null;
+    if (array_key_exists('aiGenerated', $b)) $data['ai_generated'] = !empty($b['aiGenerated']) ? 1 : 0;
+    if (array_key_exists('sourceUrls', $b)) $data['source_urls_json'] = json_encode($b['sourceUrls'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (array_key_exists('socialCreative', $b)) $data['social_creative_json'] = $b['socialCreative'] !== null ? json_encode($b['socialCreative'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : null;
+    return $data;
+}
+
+function buildTaskDbRow(array $b, bool $isCreate = false): array
+{
+    if ($isCreate) {
+        return [
+            'id' => trim((string) ($b['id'] ?? ('tsk-' . time()))),
+            'access_code' => (string) ($b['accessCode'] ?? ''),
+            'client_name' => trim((string) ($b['clientName'] ?? '')),
+            'campaign_title' => trim((string) ($b['title'] ?? $b['campaignTitle'] ?? '')),
+            'service_type' => trim((string) ($b['serviceType'] ?? 'Combo 360°')),
+            'city' => trim((string) ($b['city'] ?? 'Franco da Rocha')),
+            'stage' => trim((string) ($b['stage'] ?? 'Briefing & Material')),
+            'priority' => trim((string) ($b['priority'] ?? 'Normal')),
+            'due_date' => (string) ($b['dueDate'] ?? ''),
+            'assignee' => (string) ($b['assigneeName'] ?? $b['assignee'] ?? ''),
+            'assignee_avatar' => (string) ($b['assigneeAvatar'] ?? ''),
+            'deliverable_url' => !empty($b['deliverableUrl']) ? (string) $b['deliverableUrl'] : null,
+            'client_notes' => (string) ($b['description'] ?? $b['clientNotes'] ?? ''),
+            'client_feedback' => !empty($b['clientFeedback']) ? (string) $b['clientFeedback'] : null,
+            'outdoor_code' => !empty($b['outdoorCode']) ? (string) $b['outdoorCode'] : null,
+            'checklist_json' => json_encode($b['checklist'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'updated_at_label' => (string) ($b['updatedAt'] ?? date('d/m/Y · H:i')),
+        ];
+    }
+
+    $data = [];
+    if (array_key_exists('accessCode', $b)) $data['access_code'] = (string) $b['accessCode'];
+    if (array_key_exists('clientName', $b)) $data['client_name'] = trim((string) $b['clientName']);
+    if (array_key_exists('title', $b) || array_key_exists('campaignTitle', $b)) {
+        $data['campaign_title'] = trim((string) ($b['title'] ?? $b['campaignTitle'] ?? ''));
+    }
+    if (array_key_exists('serviceType', $b)) $data['service_type'] = trim((string) $b['serviceType']);
+    if (array_key_exists('city', $b)) $data['city'] = trim((string) $b['city']);
+    if (array_key_exists('stage', $b)) $data['stage'] = trim((string) $b['stage']);
+    if (array_key_exists('priority', $b)) $data['priority'] = trim((string) $b['priority']);
+    if (array_key_exists('dueDate', $b)) $data['due_date'] = (string) $b['dueDate'];
+    if (array_key_exists('assigneeName', $b) || array_key_exists('assignee', $b)) {
+        $data['assignee'] = (string) ($b['assigneeName'] ?? $b['assignee'] ?? '');
+    }
+    if (array_key_exists('assigneeAvatar', $b)) $data['assignee_avatar'] = (string) $b['assigneeAvatar'];
+    if (array_key_exists('deliverableUrl', $b)) $data['deliverable_url'] = !empty($b['deliverableUrl']) ? (string) $b['deliverableUrl'] : null;
+    if (array_key_exists('description', $b) || array_key_exists('clientNotes', $b)) {
+        $data['client_notes'] = (string) ($b['description'] ?? $b['clientNotes'] ?? '');
+    }
+    if (array_key_exists('clientFeedback', $b)) $data['client_feedback'] = !empty($b['clientFeedback']) ? (string) $b['clientFeedback'] : null;
+    if (array_key_exists('outdoorCode', $b)) $data['outdoor_code'] = !empty($b['outdoorCode']) ? (string) $b['outdoorCode'] : null;
+    if (array_key_exists('checklist', $b)) $data['checklist_json'] = json_encode($b['checklist'] ?? [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (array_key_exists('updatedAt', $b)) $data['updated_at_label'] = (string) $b['updatedAt'];
+    return $data;
+}
+
+function buildFinancialDbRow(array $b, bool $isCreate = false): array
+{
+    if ($isCreate) {
+        return [
+            'id' => trim((string) ($b['id'] ?? ('fin-' . time()))),
+            'type' => trim((string) ($b['type'] ?? 'Receita')),
+            'description' => trim((string) ($b['description'] ?? '')),
+            'counterparty_name' => trim((string) ($b['counterpartyName'] ?? $b['clientOrVendor'] ?? '')),
+            'counterparty_role' => trim((string) ($b['counterpartyRole'] ?? 'Anunciante / Cliente')),
+            'cost_center' => trim((string) ($b['costCenter'] ?? $b['category'] ?? 'Operações FortMídia')),
+            'due_date' => (string) ($b['dueDate'] ?? ''),
+            'amount' => (float) ($b['amount'] ?? 0),
+            'status' => trim((string) ($b['status'] ?? 'Pendente')),
+            'payment_method' => trim((string) ($b['paymentMethod'] ?? 'PIX')),
+            'invoice_ref' => !empty($b['invoiceRef'] ?? $b['referenceCode'] ?? null)
+                ? (string) ($b['invoiceRef'] ?? $b['referenceCode'])
+                : null,
+        ];
+    }
+
+    $data = [];
+    if (array_key_exists('type', $b)) $data['type'] = trim((string) $b['type']);
+    if (array_key_exists('description', $b)) $data['description'] = trim((string) $b['description']);
+    if (array_key_exists('counterpartyName', $b) || array_key_exists('clientOrVendor', $b)) {
+        $data['counterparty_name'] = trim((string) ($b['counterpartyName'] ?? $b['clientOrVendor'] ?? ''));
+    }
+    if (array_key_exists('counterpartyRole', $b)) $data['counterparty_role'] = trim((string) $b['counterpartyRole']);
+    if (array_key_exists('costCenter', $b) || array_key_exists('category', $b)) {
+        $data['cost_center'] = trim((string) ($b['costCenter'] ?? $b['category'] ?? ''));
+    }
+    if (array_key_exists('dueDate', $b)) $data['due_date'] = (string) $b['dueDate'];
+    if (array_key_exists('amount', $b)) $data['amount'] = (float) $b['amount'];
+    if (array_key_exists('status', $b)) $data['status'] = trim((string) $b['status']);
+    if (array_key_exists('paymentMethod', $b)) $data['payment_method'] = trim((string) $b['paymentMethod']);
+    if (array_key_exists('invoiceRef', $b) || array_key_exists('referenceCode', $b)) {
+        $ref = $b['invoiceRef'] ?? $b['referenceCode'] ?? null;
+        $data['invoice_ref'] = !empty($ref) ? (string) $ref : null;
+    }
+    return $data;
+}
+
+function buildCampaignDbRow(array $b, bool $isCreate = false): array
+{
+    if ($isCreate) {
+        return [
+            'id' => trim((string) ($b['id'] ?? ('adv-' . time()))),
+            'advertiser' => trim((string) ($b['advertiser'] ?? '')),
+            'title' => trim((string) ($b['title'] ?? '')),
+            'ad_type' => trim((string) ($b['adType'] ?? 'Patrocínio')),
+            'city' => trim((string) ($b['city'] ?? 'Franco da Rocha')),
+            'placement_spec' => (string) ($b['placementSpec'] ?? ''),
+            'start_date' => (string) ($b['startDate'] ?? ''),
+            'end_date' => (string) ($b['endDate'] ?? ''),
+            'contract_value' => (float) ($b['value'] ?? $b['contractValue'] ?? 0),
+            'status' => trim((string) ($b['status'] ?? 'Programada')),
+            'artwork_status' => trim((string) ($b['artworkStatus'] ?? 'Aguardando Material')),
+            'creative_url' => !empty($b['creativeUrl']) ? (string) $b['creativeUrl'] : null,
+            'checking_notes' => (string) ($b['checkingNotes'] ?? ''),
+            'account_manager' => (string) ($b['accountManager'] ?? 'Comercial FortMídia'),
+        ];
+    }
+
+    $data = [];
+    if (array_key_exists('advertiser', $b)) $data['advertiser'] = trim((string) $b['advertiser']);
+    if (array_key_exists('title', $b)) $data['title'] = trim((string) $b['title']);
+    if (array_key_exists('adType', $b)) $data['ad_type'] = trim((string) $b['adType']);
+    if (array_key_exists('city', $b)) $data['city'] = trim((string) $b['city']);
+    if (array_key_exists('placementSpec', $b)) $data['placement_spec'] = (string) $b['placementSpec'];
+    if (array_key_exists('startDate', $b)) $data['start_date'] = (string) $b['startDate'];
+    if (array_key_exists('endDate', $b)) $data['end_date'] = (string) $b['endDate'];
+    if (array_key_exists('value', $b) || array_key_exists('contractValue', $b)) {
+        $data['contract_value'] = (float) ($b['value'] ?? $b['contractValue'] ?? 0);
+    }
+    if (array_key_exists('status', $b)) $data['status'] = trim((string) $b['status']);
+    if (array_key_exists('artworkStatus', $b)) $data['artwork_status'] = trim((string) $b['artworkStatus']);
+    if (array_key_exists('creativeUrl', $b)) $data['creative_url'] = !empty($b['creativeUrl']) ? (string) $b['creativeUrl'] : null;
+    if (array_key_exists('checkingNotes', $b)) $data['checking_notes'] = (string) $b['checkingNotes'];
+    if (array_key_exists('accountManager', $b)) $data['account_manager'] = (string) $b['accountManager'];
+    return $data;
+}
+
+function buildOutdoorDbRow(array $b, bool $isCreate = false): array
+{
+    if ($isCreate) {
+        $biweekly = (float) ($b['bimonthlyPrice'] ?? $b['biweeklyRate'] ?? 1350);
+        return [
+            'id' => trim((string) ($b['id'] ?? ('ooh-' . time()))),
+            'code' => trim((string) ($b['code'] ?? ('OOH-' . random_int(100, 999)))),
+            'city' => trim((string) ($b['city'] ?? 'Franco da Rocha')),
+            'location_name' => trim((string) ($b['title'] ?? $b['locationName'] ?? '')),
+            'address_reference' => (string) ($b['address'] ?? $b['addressReference'] ?? ''),
+            'dimensions' => (string) ($b['dimensions'] ?? '9,00m x 3,00m'),
+            'lighting' => (string) ($b['lighting'] ?? 'Iluminado (Frontlight)'),
+            'lat' => (float) ($b['lat'] ?? -23.3219),
+            'lng' => (float) ($b['lng'] ?? -46.7272),
+            'monthly_rate' => (float) ($b['monthlyRate'] ?? ($biweekly * 1.7)),
+            'biweekly_rate' => $biweekly,
+            'availability' => trim((string) ($b['availability'] ?? 'Disponível')),
+            'current_advertiser' => !empty($b['currentAdvertiser']) ? (string) $b['currentAdvertiser'] : null,
+            'occupied_until' => !empty($b['availableFrom'] ?? $b['occupiedUntil'] ?? null)
+                ? (string) ($b['availableFrom'] ?? $b['occupiedUntil'])
+                : null,
+            'photo_url' => (string) ($b['photoUrl'] ?? ''),
+            'daily_traffic_estimate' => (string) ($b['dailyTrafficEstimate'] ?? ''),
+            'notes' => !empty($b['notes']) ? (string) $b['notes'] : null,
+        ];
+    }
+
+    $data = [];
+    if (array_key_exists('code', $b)) $data['code'] = trim((string) $b['code']);
+    if (array_key_exists('city', $b)) $data['city'] = trim((string) $b['city']);
+    if (array_key_exists('title', $b) || array_key_exists('locationName', $b)) {
+        $data['location_name'] = trim((string) ($b['title'] ?? $b['locationName'] ?? ''));
+    }
+    if (array_key_exists('address', $b) || array_key_exists('addressReference', $b)) {
+        $data['address_reference'] = (string) ($b['address'] ?? $b['addressReference'] ?? '');
+    }
+    if (array_key_exists('dimensions', $b)) $data['dimensions'] = (string) $b['dimensions'];
+    if (array_key_exists('lighting', $b)) $data['lighting'] = (string) $b['lighting'];
+    if (array_key_exists('lat', $b)) $data['lat'] = (float) $b['lat'];
+    if (array_key_exists('lng', $b)) $data['lng'] = (float) $b['lng'];
+    if (array_key_exists('monthlyRate', $b)) $data['monthly_rate'] = (float) $b['monthlyRate'];
+    if (array_key_exists('bimonthlyPrice', $b) || array_key_exists('biweeklyRate', $b)) {
+        $data['biweekly_rate'] = (float) ($b['bimonthlyPrice'] ?? $b['biweeklyRate'] ?? 0);
+    }
+    if (array_key_exists('availability', $b)) $data['availability'] = trim((string) $b['availability']);
+    if (array_key_exists('currentAdvertiser', $b)) $data['current_advertiser'] = !empty($b['currentAdvertiser']) ? (string) $b['currentAdvertiser'] : null;
+    if (array_key_exists('availableFrom', $b) || array_key_exists('occupiedUntil', $b)) {
+        $until = $b['availableFrom'] ?? $b['occupiedUntil'] ?? null;
+        $data['occupied_until'] = !empty($until) ? (string) $until : null;
+    }
+    if (array_key_exists('photoUrl', $b)) $data['photo_url'] = (string) $b['photoUrl'];
+    if (array_key_exists('dailyTrafficEstimate', $b)) $data['daily_traffic_estimate'] = (string) $b['dailyTrafficEstimate'];
+    if (array_key_exists('notes', $b)) $data['notes'] = !empty($b['notes']) ? (string) $b['notes'] : null;
+    return $data;
+}
+
+function buildCitizenReportDbRow(array $b, bool $isCreate = false): array
+{
+    if ($isCreate) {
+        return [
+            'id' => trim((string) ($b['id'] ?? ('rep-' . time()))),
+            'protocol' => trim((string) ($b['protocol'] ?? ('FC-' . date('Y') . '-' . random_int(1000, 9999)))),
+            'citizen_name' => trim((string) ($b['citizenName'] ?? 'Cidadão')),
+            'contact' => trim((string) ($b['contact'] ?? '')),
+            'city' => trim((string) ($b['city'] ?? 'Franco da Rocha')),
+            'neighborhood' => trim((string) ($b['neighborhood'] ?? '')),
+            'category' => trim((string) ($b['category'] ?? 'Zeladoria & Infraestrutura')),
+            'urgency' => trim((string) ($b['urgency'] ?? 'Normal')),
+            'title' => trim((string) ($b['title'] ?? '')),
+            'description' => trim((string) ($b['description'] ?? '')),
+            'status' => trim((string) ($b['status'] ?? 'Aguardando Triagem')),
+            'triage_score' => isset($b['triageScore']) ? (int) $b['triageScore'] : null,
+            'assigned_editor' => !empty($b['assignedEditor']) ? (string) $b['assignedEditor'] : null,
+            'official_response_note' => !empty($b['officialResponseNote']) ? (string) $b['officialResponseNote'] : null,
+            'response_author' => !empty($b['responseAuthor']) ? (string) $b['responseAuthor'] : null,
+            'response_sent_at' => !empty($b['responseSentAt']) ? (string) $b['responseSentAt'] : null,
+            'forwarded_at' => !empty($b['forwardedAt']) ? (string) $b['forwardedAt'] : null,
+            'forwarded_to' => !empty($b['forwardedTo']) ? (string) $b['forwardedTo'] : null,
+            'created_at_label' => (string) ($b['createdAt'] ?? date('d/m/Y · H:i')),
+        ];
+    }
+
+    $data = [];
+    if (array_key_exists('citizenName', $b)) $data['citizen_name'] = trim((string) $b['citizenName']);
+    if (array_key_exists('contact', $b)) $data['contact'] = trim((string) $b['contact']);
+    if (array_key_exists('city', $b)) $data['city'] = trim((string) $b['city']);
+    if (array_key_exists('neighborhood', $b)) $data['neighborhood'] = trim((string) $b['neighborhood']);
+    if (array_key_exists('category', $b)) $data['category'] = trim((string) $b['category']);
+    if (array_key_exists('urgency', $b)) $data['urgency'] = trim((string) $b['urgency']);
+    if (array_key_exists('title', $b)) $data['title'] = trim((string) $b['title']);
+    if (array_key_exists('description', $b)) $data['description'] = trim((string) $b['description']);
+    if (array_key_exists('status', $b)) $data['status'] = trim((string) $b['status']);
+    if (array_key_exists('triageScore', $b)) $data['triage_score'] = $b['triageScore'] !== null ? (int) $b['triageScore'] : null;
+    if (array_key_exists('assignedEditor', $b)) $data['assigned_editor'] = !empty($b['assignedEditor']) ? (string) $b['assignedEditor'] : null;
+    if (array_key_exists('officialResponseNote', $b)) $data['official_response_note'] = !empty($b['officialResponseNote']) ? (string) $b['officialResponseNote'] : null;
+    if (array_key_exists('responseAuthor', $b)) $data['response_author'] = !empty($b['responseAuthor']) ? (string) $b['responseAuthor'] : null;
+    if (array_key_exists('responseSentAt', $b)) $data['response_sent_at'] = !empty($b['responseSentAt']) ? (string) $b['responseSentAt'] : null;
+    if (array_key_exists('forwardedAt', $b)) $data['forwarded_at'] = !empty($b['forwardedAt']) ? (string) $b['forwardedAt'] : null;
+    if (array_key_exists('forwardedTo', $b)) $data['forwarded_to'] = !empty($b['forwardedTo']) ? (string) $b['forwardedTo'] : null;
+    return $data;
+}
+
+// ----------------------------------------------------------------------------
+// 5. Resolução da Rota (/api/...)
 // ----------------------------------------------------------------------------
 $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 $requestUriPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
@@ -200,11 +878,15 @@ if ($scriptDir !== '' && str_starts_with($requestUriPath, $scriptDir)) {
 $routePath = '/' . trim($routePath, '/');
 $segments = $routePath === '/' ? [] : explode('/', trim($routePath, '/'));
 $resource = $segments[0] ?? '';
-$subResource = $segments[1] ?? null;
-$itemId = $segments[2] ?? ($subResource && !in_array($subResource, ['leads', 'contracts', 'tasks', 'login', 'me', 'logout', 'setup-admin'], true) ? $subResource : null);
+$subResource = isset($segments[1]) ? urldecode($segments[1]) : null;
+$subItemId = isset($segments[2]) ? urldecode($segments[2]) : null;
+$reservedSubRoutes = ['leads', 'contracts', 'tasks', 'login', 'me', 'logout', 'setup-admin', 'seed'];
+$itemId = $subItemId !== null
+    ? $subItemId
+    : ($subResource !== null && !in_array($subResource, $reservedSubRoutes, true) ? $subResource : null);
 
 // ----------------------------------------------------------------------------
-// 4. Rotas Públicas de Diagnóstico & Config
+// 6. Rotas Públicas de Diagnóstico & Config
 // ----------------------------------------------------------------------------
 if ($resource === 'health' && $method === 'GET') {
     jsonResponse(200, [
@@ -222,7 +904,7 @@ if ($resource === 'public-config' && $method === 'GET') {
 }
 
 // ----------------------------------------------------------------------------
-// 5. Autenticação (/api/auth/setup-admin, /login, /me, /logout)
+// 7. Autenticação (/api/auth/setup-admin, /login, /me, /logout)
 // ----------------------------------------------------------------------------
 if ($resource === 'auth') {
     $pdo = getPdo($config);
@@ -333,7 +1015,7 @@ if ($resource === 'auth') {
 }
 
 // ----------------------------------------------------------------------------
-// 6. Sincronização de Snapshot Completo (/api/state)
+// 8. Sincronização de Snapshot Completo (/api/state)
 // ----------------------------------------------------------------------------
 if ($resource === 'state') {
     $pdo = getPdo($config);
@@ -375,7 +1057,129 @@ if ($resource === 'state') {
 }
 
 // ----------------------------------------------------------------------------
-// 7. Notícias & Pautas (/api/pautas)
+// 9. Rotina de Carga Inicial no MySQL (/api/sync/seed) — Super Admin / Admin
+// ----------------------------------------------------------------------------
+if ($resource === 'sync' && $subResource === 'seed' && $method === 'POST') {
+    $pdo = getPdo($config);
+    $admin = requireAdmin($pdo);
+    $body = readJsonBody();
+
+    $inserted = [
+        'contracts' => 0,
+        'leads' => 0,
+        'users' => 0,
+        'pautas' => 0,
+        'financialEntries' => 0,
+        'campaigns' => 0,
+        'outdoors' => 0,
+        'citizenReports' => 0,
+        'clientTasks' => 0,
+    ];
+
+    try {
+        foreach ((array) ($body['contracts'] ?? []) as $row) {
+            if (!is_array($row)) continue;
+            $inserted['contracts'] += insertFilteredRow($pdo, 'crm_contracts', buildContractDbRow($row, true), true);
+        }
+
+        foreach ((array) ($body['leads'] ?? []) as $row) {
+            if (!is_array($row)) continue;
+            $inserted['leads'] += insertFilteredRow($pdo, 'crm_leads', buildLeadDbRow($row, true), true);
+        }
+
+        foreach ((array) ($body['pautas'] ?? []) as $row) {
+            if (!is_array($row)) continue;
+            $inserted['pautas'] += insertFilteredRow($pdo, 'news_pautas', buildPautaDbRow($row, true), true);
+        }
+
+        if (getTableColumns($pdo, 'financial_entries') !== []) {
+            foreach ((array) ($body['financialEntries'] ?? []) as $row) {
+                if (!is_array($row)) continue;
+                $inserted['financialEntries'] += insertFilteredRow($pdo, 'financial_entries', buildFinancialDbRow($row, true), true);
+            }
+        }
+
+        if (getTableColumns($pdo, 'campaigns') !== []) {
+            foreach ((array) ($body['campaigns'] ?? []) as $row) {
+                if (!is_array($row)) continue;
+                $inserted['campaigns'] += insertFilteredRow($pdo, 'campaigns', buildCampaignDbRow($row, true), true);
+            }
+        }
+
+        if (getTableColumns($pdo, 'outdoor_points') !== []) {
+            foreach ((array) ($body['outdoors'] ?? []) as $row) {
+                if (!is_array($row)) continue;
+                $inserted['outdoors'] += insertFilteredRow($pdo, 'outdoor_points', buildOutdoorDbRow($row, true), true);
+            }
+        }
+
+        foreach ((array) ($body['citizenReports'] ?? []) as $row) {
+            if (!is_array($row)) continue;
+            $inserted['citizenReports'] += insertFilteredRow($pdo, 'citizen_reports', buildCitizenReportDbRow($row, true), true);
+        }
+
+        if (getTableColumns($pdo, 'crm_client_tasks') !== []) {
+            foreach ((array) ($body['clientTasks'] ?? []) as $row) {
+                if (!is_array($row)) continue;
+                $inserted['clientTasks'] += insertFilteredRow($pdo, 'crm_client_tasks', buildTaskDbRow($row, true), true);
+            }
+        }
+
+        // Usuários iniciais: INSERT IGNORE garante que o Super Admin real já cadastrado nunca seja sobrescrito
+        foreach ((array) ($body['users'] ?? []) as $row) {
+            if (!is_array($row)) continue;
+            $email = strtolower(trim((string) ($row['email'] ?? '')));
+            $rawPass = (string) ($row['password'] ?? '');
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($rawPass) < 6) {
+                continue;
+            }
+            $userDbRow = [
+                'id' => trim((string) ($row['id'] ?? ('usr-' . bin2hex(random_bytes(4))))),
+                'name' => trim((string) ($row['name'] ?? 'Membro FortMídia')),
+                'role' => trim((string) ($row['role'] ?? 'Executivo Comercial')),
+                'hierarchy_level' => (int) ($row['hierarchyLevel'] ?? 4),
+                'department' => trim((string) ($row['department'] ?? 'Operações FortMídia')),
+                'email' => $email,
+                'phone' => trim((string) ($row['phone'] ?? '')),
+                'password_hash' => password_hash($rawPass, PASSWORD_BCRYPT),
+                'avatar_url' => (string) ($row['avatarUrl'] ?? ''),
+                'bio' => (string) ($row['bio'] ?? ''),
+                'linked_client_name' => !empty($row['linkedClientName']) ? (string) $row['linkedClientName'] : null,
+                'allowed_modules_json' => json_encode($row['allowedModules'] ?? [], JSON_UNESCAPED_UNICODE),
+                'permissions_json' => json_encode($row['permissions'] ?? [], JSON_UNESCAPED_UNICODE),
+                'active' => !isset($row['active']) || $row['active'] ? 1 : 0,
+            ];
+            $inserted['users'] += insertFilteredRow($pdo, 'users', $userDbRow, true);
+        }
+
+        if (isset($body['stateSnapshot']) && is_array($body['stateSnapshot']) && getTableColumns($pdo, 'app_state_snapshots') !== []) {
+            $encoded = json_encode($body['stateSnapshot'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $stmt = $pdo->prepare(
+                'INSERT INTO app_state_snapshots (snapshot_key, payload_json, updated_by)
+                 VALUES (:k, :payload, :uid)
+                 ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json), updated_by = VALUES(updated_by)'
+            );
+            $stmt->execute([
+                ':k' => 'fortmidia_portal_state',
+                ':payload' => $encoded,
+                ':uid' => $admin['id'],
+            ]);
+        }
+
+        jsonResponse(200, [
+            'ok' => true,
+            'inserted' => $inserted,
+            'message' => 'Sincronização inicial concluída no MySQL.',
+        ]);
+    } catch (Throwable) {
+        jsonResponse(500, [
+            'error' => 'Falha ao gravar dados iniciais no MySQL. Verifique se todas as tabelas do schema.sql foram importadas.',
+        ]);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// 10. Notícias & Pautas (/api/pautas)
 // ----------------------------------------------------------------------------
 if ($resource === 'pautas') {
     $pdo = getPdo($config);
@@ -383,47 +1187,37 @@ if ($resource === 'pautas') {
     if ($method === 'GET') {
         $user = getAuthenticatedUser($pdo);
         if ($user !== null) {
-            $rows = $pdo->query('SELECT * FROM news_pautas ORDER BY created_at DESC LIMIT 200')->fetchAll();
+            $rows = $pdo->query('SELECT * FROM news_pautas ORDER BY created_at DESC LIMIT 300')->fetchAll();
         } else {
             $stmt = $pdo->prepare(
-                'SELECT * FROM news_pautas WHERE approval_status = :status ORDER BY created_at DESC LIMIT 100'
+                'SELECT * FROM news_pautas WHERE approval_status = :status ORDER BY created_at DESC LIMIT 150'
             );
             $stmt->execute([':status' => 'Publicada no Site']);
             $rows = $stmt->fetchAll();
         }
-        jsonResponse(200, ['items' => $rows]);
+        jsonResponse(200, ['items' => array_map('formatPautaRow', $rows)]);
     }
 
     requireAuth($pdo);
 
     if ($method === 'POST') {
         $b = readJsonBody();
-        $id = trim((string) ($b['id'] ?? ('pau-' . time())));
-        $stmt = $pdo->prepare(
-            'INSERT INTO news_pautas
-             (id, title, city, seal, format, reporter, deadline, status, approval_status, summary, body, image_url, media_type, video_url, source_protocol, ai_generated)
-             VALUES
-             (:id, :title, :city, :seal, :format, :reporter, :deadline, :status, :approval_status, :summary, :body, :image_url, :media_type, :video_url, :source_protocol, :ai_generated)'
-        );
-        $stmt->execute([
-            ':id' => $id,
-            ':title' => trim((string) ($b['title'] ?? 'Sem título')),
-            ':city' => trim((string) ($b['city'] ?? 'Regional CIMBAJU')),
-            ':seal' => trim((string) ($b['seal'] ?? 'Geral')),
-            ':format' => trim((string) ($b['format'] ?? 'Portal 24/7')),
-            ':reporter' => trim((string) ($b['reporter'] ?? 'Redação FortNews')),
-            ':deadline' => (string) ($b['deadline'] ?? ''),
-            ':status' => trim((string) ($b['status'] ?? 'Apuração de Rua')),
-            ':approval_status' => trim((string) ($b['approvalStatus'] ?? 'Aguardando Redator-Chefe')),
-            ':summary' => (string) ($b['summary'] ?? ''),
-            ':body' => (string) ($b['body'] ?? ''),
-            ':image_url' => (string) ($b['imageUrl'] ?? ''),
-            ':media_type' => (string) ($b['mediaType'] ?? 'image'),
-            ':video_url' => (string) ($b['videoUrl'] ?? ''),
-            ':source_protocol' => $b['sourceProtocol'] ?? null,
-            ':ai_generated' => !empty($b['aiGenerated']) ? 1 : 0,
-        ]);
-        jsonResponse(201, ['item' => array_merge($b, ['id' => $id])]);
+        $row = buildPautaDbRow($b, true);
+        insertFilteredRow($pdo, 'news_pautas', $row, false);
+        $stmt = $pdo->prepare('SELECT * FROM news_pautas WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $row['id']]);
+        $saved = $stmt->fetch();
+        jsonResponse(201, ['item' => $saved ? formatPautaRow($saved) : array_merge($b, ['id' => $row['id']])]);
+    }
+
+    if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
+        $b = readJsonBody();
+        $patch = buildPautaDbRow($b, false);
+        updateFilteredRow($pdo, 'news_pautas', $itemId, $patch);
+        $stmt = $pdo->prepare('SELECT * FROM news_pautas WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $itemId]);
+        $saved = $stmt->fetch();
+        jsonResponse(200, ['ok' => true, 'item' => $saved ? formatPautaRow($saved) : null]);
     }
 
     if ($method === 'DELETE' && $itemId) {
@@ -434,7 +1228,7 @@ if ($resource === 'pautas') {
 }
 
 // ----------------------------------------------------------------------------
-// 8. Demandas Cidadãs — Canal Fala Cidadão (/api/demandas)
+// 11. Demandas Cidadãs — Canal Fala Cidadão (/api/demandas)
 // ----------------------------------------------------------------------------
 if ($resource === 'demandas') {
     $pdo = getPdo($config);
@@ -442,46 +1236,29 @@ if ($resource === 'demandas') {
     // Envio público pelo formulário Fala Cidadão
     if ($method === 'POST') {
         $b = readJsonBody();
-        $id = trim((string) ($b['id'] ?? ('rep-' . time())));
-        $protocol = trim((string) ($b['protocol'] ?? ('FC-' . date('Y') . '-' . random_int(1000, 9999))));
-        $stmt = $pdo->prepare(
-            'INSERT INTO citizen_reports
-             (id, protocol, citizen_name, contact, city, neighborhood, category, urgency, title, description, status, created_at_label)
-             VALUES
-             (:id, :protocol, :citizen_name, :contact, :city, :neighborhood, :category, :urgency, :title, :description, :status, :created_at_label)'
-        );
-        $stmt->execute([
-            ':id' => $id,
-            ':protocol' => $protocol,
-            ':citizen_name' => trim((string) ($b['citizenName'] ?? 'Cidadão')),
-            ':contact' => trim((string) ($b['contact'] ?? '')),
-            ':city' => trim((string) ($b['city'] ?? 'Franco da Rocha')),
-            ':neighborhood' => trim((string) ($b['neighborhood'] ?? '')),
-            ':category' => trim((string) ($b['category'] ?? 'Zeladoria & Infraestrutura')),
-            ':urgency' => trim((string) ($b['urgency'] ?? 'Normal')),
-            ':title' => trim((string) ($b['title'] ?? '')),
-            ':description' => trim((string) ($b['description'] ?? '')),
-            ':status' => 'Aguardando Triagem',
-            ':created_at_label' => (string) ($b['createdAt'] ?? date('d/m/Y · H:i')),
-        ]);
-        jsonResponse(201, ['item' => array_merge($b, ['id' => $id, 'protocol' => $protocol])]);
+        $row = buildCitizenReportDbRow($b, true);
+        insertFilteredRow($pdo, 'citizen_reports', $row, false);
+        $stmt = $pdo->prepare('SELECT * FROM citizen_reports WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $row['id']]);
+        $saved = $stmt->fetch();
+        jsonResponse(201, ['item' => $saved ? formatCitizenReportRow($saved) : array_merge($b, ['id' => $row['id'], 'protocol' => $row['protocol']])]);
     }
 
     requireAuth($pdo);
 
     if ($method === 'GET') {
-        $rows = $pdo->query('SELECT * FROM citizen_reports ORDER BY created_at DESC LIMIT 200')->fetchAll();
-        jsonResponse(200, ['items' => $rows]);
+        $rows = $pdo->query('SELECT * FROM citizen_reports ORDER BY created_at DESC LIMIT 300')->fetchAll();
+        jsonResponse(200, ['items' => array_map('formatCitizenReportRow', $rows)]);
     }
 
-    if ($method === 'PUT' && $itemId) {
+    if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
         $b = readJsonBody();
-        $stmt = $pdo->prepare('UPDATE citizen_reports SET status = :status WHERE id = :id');
-        $stmt->execute([
-            ':status' => trim((string) ($b['status'] ?? 'Em Verificação')),
-            ':id' => $itemId,
-        ]);
-        jsonResponse(200, ['ok' => true]);
+        $patch = buildCitizenReportDbRow($b, false);
+        updateFilteredRow($pdo, 'citizen_reports', $itemId, $patch);
+        $stmt = $pdo->prepare('SELECT * FROM citizen_reports WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $itemId]);
+        $saved = $stmt->fetch();
+        jsonResponse(200, ['ok' => true, 'item' => $saved ? formatCitizenReportRow($saved) : null]);
     }
 
     if ($method === 'DELETE' && $itemId) {
@@ -492,55 +1269,244 @@ if ($resource === 'demandas') {
 }
 
 // ----------------------------------------------------------------------------
-// 9. CRM — Leads & Contratos (/api/clientes/leads, /api/clientes/contracts)
+// 12. CRM — Leads, Contratos & Pipeline de Clientes (/api/clientes/*)
 // ----------------------------------------------------------------------------
 if ($resource === 'clientes') {
     $pdo = getPdo($config);
 
     if ($subResource === 'leads') {
+        // Envio público de lead pelo site FortMídia ou autenticado no painel
         if ($method === 'POST') {
             $b = readJsonBody();
-            $id = trim((string) ($b['id'] ?? ('lead-' . time())));
-            $stmt = $pdo->prepare(
-                'INSERT INTO crm_leads (id, company_or_name, contact, city, quota_title, notes, status, created_at_label)
-                 VALUES (:id, :company, :contact, :city, :quota, :notes, :status, :created_label)'
-            );
-            $stmt->execute([
-                ':id' => $id,
-                ':company' => trim((string) ($b['companyOrName'] ?? '')),
-                ':contact' => trim((string) ($b['contact'] ?? '')),
-                ':city' => trim((string) ($b['city'] ?? 'Franco da Rocha')),
-                ':quota' => trim((string) ($b['quotaTitle'] ?? '')),
-                ':notes' => (string) ($b['notes'] ?? ''),
-                ':status' => 'Novo Lead',
-                ':created_label' => (string) ($b['createdAt'] ?? date('d/m/Y · H:i')),
-            ]);
-            jsonResponse(201, ['item' => array_merge($b, ['id' => $id])]);
+            $row = buildLeadDbRow($b, true);
+            insertFilteredRow($pdo, 'crm_leads', $row, false);
+            $stmt = $pdo->prepare('SELECT * FROM crm_leads WHERE id = :id LIMIT 1');
+            $stmt->execute([':id' => $row['id']]);
+            $saved = $stmt->fetch();
+            jsonResponse(201, ['item' => $saved ? formatLeadRow($saved) : array_merge($b, ['id' => $row['id']])]);
         }
 
         requireAuth($pdo);
 
         if ($method === 'GET') {
-            $rows = $pdo->query('SELECT * FROM crm_leads ORDER BY created_at DESC LIMIT 200')->fetchAll();
-            jsonResponse(200, ['items' => $rows]);
+            $rows = $pdo->query('SELECT * FROM crm_leads ORDER BY created_at DESC LIMIT 300')->fetchAll();
+            jsonResponse(200, ['items' => array_map('formatLeadRow', $rows)]);
+        }
+
+        if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
+            $b = readJsonBody();
+            $patch = buildLeadDbRow($b, false);
+            updateFilteredRow($pdo, 'crm_leads', $itemId, $patch);
+            $stmt = $pdo->prepare('SELECT * FROM crm_leads WHERE id = :id LIMIT 1');
+            $stmt->execute([':id' => $itemId]);
+            $saved = $stmt->fetch();
+            jsonResponse(200, ['ok' => true, 'item' => $saved ? formatLeadRow($saved) : null]);
+        }
+
+        if ($method === 'DELETE' && $itemId) {
+            $stmt = $pdo->prepare('DELETE FROM crm_leads WHERE id = :id');
+            $stmt->execute([':id' => $itemId]);
+            jsonResponse(200, ['ok' => true]);
         }
     }
 
     if ($subResource === 'contracts') {
         requireAuth($pdo);
+
         if ($method === 'GET') {
-            $rows = $pdo->query('SELECT * FROM crm_contracts ORDER BY created_at DESC LIMIT 200')->fetchAll();
-            jsonResponse(200, ['items' => $rows]);
+            $rows = $pdo->query('SELECT * FROM crm_contracts ORDER BY created_at DESC LIMIT 300')->fetchAll();
+            jsonResponse(200, ['items' => array_map('formatContractRow', $rows)]);
+        }
+
+        if ($method === 'POST') {
+            $b = readJsonBody();
+            $row = buildContractDbRow($b, true);
+            if ($row['client'] === '') {
+                jsonResponse(400, ['error' => 'Informe o nome do cliente para salvar o contrato.']);
+            }
+            insertFilteredRow($pdo, 'crm_contracts', $row, false);
+            $stmt = $pdo->prepare('SELECT * FROM crm_contracts WHERE id = :id LIMIT 1');
+            $stmt->execute([':id' => $row['id']]);
+            $saved = $stmt->fetch();
+            jsonResponse(201, ['item' => $saved ? formatContractRow($saved) : array_merge($b, ['id' => $row['id']])]);
+        }
+
+        if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
+            $b = readJsonBody();
+            $patch = buildContractDbRow($b, false);
+            updateFilteredRow($pdo, 'crm_contracts', $itemId, $patch);
+            $stmt = $pdo->prepare('SELECT * FROM crm_contracts WHERE id = :id LIMIT 1');
+            $stmt->execute([':id' => $itemId]);
+            $saved = $stmt->fetch();
+            jsonResponse(200, ['ok' => true, 'item' => $saved ? formatContractRow($saved) : null]);
+        }
+
+        if ($method === 'DELETE' && $itemId) {
+            $stmt = $pdo->prepare('DELETE FROM crm_contracts WHERE id = :id');
+            $stmt->execute([':id' => $itemId]);
+            jsonResponse(200, ['ok' => true]);
+        }
+    }
+
+    if ($subResource === 'tasks') {
+        requireAuth($pdo);
+
+        if ($method === 'GET') {
+            $rows = $pdo->query('SELECT * FROM crm_client_tasks ORDER BY created_at DESC LIMIT 300')->fetchAll();
+            jsonResponse(200, ['items' => array_map('formatTaskRow', $rows)]);
+        }
+
+        if ($method === 'POST') {
+            $b = readJsonBody();
+            $row = buildTaskDbRow($b, true);
+            insertFilteredRow($pdo, 'crm_client_tasks', $row, false);
+            $stmt = $pdo->prepare('SELECT * FROM crm_client_tasks WHERE id = :id LIMIT 1');
+            $stmt->execute([':id' => $row['id']]);
+            $saved = $stmt->fetch();
+            jsonResponse(201, ['item' => $saved ? formatTaskRow($saved) : array_merge($b, ['id' => $row['id']])]);
+        }
+
+        if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
+            $b = readJsonBody();
+            $patch = buildTaskDbRow($b, false);
+            updateFilteredRow($pdo, 'crm_client_tasks', $itemId, $patch);
+            $stmt = $pdo->prepare('SELECT * FROM crm_client_tasks WHERE id = :id LIMIT 1');
+            $stmt->execute([':id' => $itemId]);
+            $saved = $stmt->fetch();
+            jsonResponse(200, ['ok' => true, 'item' => $saved ? formatTaskRow($saved) : null]);
+        }
+
+        if ($method === 'DELETE' && $itemId) {
+            $stmt = $pdo->prepare('DELETE FROM crm_client_tasks WHERE id = :id');
+            $stmt->execute([':id' => $itemId]);
+            jsonResponse(200, ['ok' => true]);
         }
     }
 }
 
 // ----------------------------------------------------------------------------
-// 10. Usuários (/api/usuarios) — Protegido para Super Admin / Admin
+// 13. Financeiro de Agência (/api/financeiro)
+// ----------------------------------------------------------------------------
+if ($resource === 'financeiro') {
+    $pdo = getPdo($config);
+    requireAuth($pdo);
+
+    if ($method === 'GET') {
+        $rows = $pdo->query('SELECT * FROM financial_entries ORDER BY created_at DESC LIMIT 400')->fetchAll();
+        jsonResponse(200, ['items' => array_map('formatFinancialRow', $rows)]);
+    }
+
+    if ($method === 'POST') {
+        $b = readJsonBody();
+        $row = buildFinancialDbRow($b, true);
+        insertFilteredRow($pdo, 'financial_entries', $row, false);
+        $stmt = $pdo->prepare('SELECT * FROM financial_entries WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $row['id']]);
+        $saved = $stmt->fetch();
+        jsonResponse(201, ['item' => $saved ? formatFinancialRow($saved) : array_merge($b, ['id' => $row['id']])]);
+    }
+
+    if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
+        $b = readJsonBody();
+        $patch = buildFinancialDbRow($b, false);
+        updateFilteredRow($pdo, 'financial_entries', $itemId, $patch);
+        $stmt = $pdo->prepare('SELECT * FROM financial_entries WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $itemId]);
+        $saved = $stmt->fetch();
+        jsonResponse(200, ['ok' => true, 'item' => $saved ? formatFinancialRow($saved) : null]);
+    }
+
+    if ($method === 'DELETE' && $itemId) {
+        $stmt = $pdo->prepare('DELETE FROM financial_entries WHERE id = :id');
+        $stmt->execute([':id' => $itemId]);
+        jsonResponse(200, ['ok' => true]);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// 14. Campanhas de Publicidade (/api/campanhas)
+// ----------------------------------------------------------------------------
+if ($resource === 'campanhas') {
+    $pdo = getPdo($config);
+    requireAuth($pdo);
+
+    if ($method === 'GET') {
+        $rows = $pdo->query('SELECT * FROM campaigns ORDER BY created_at DESC LIMIT 300')->fetchAll();
+        jsonResponse(200, ['items' => array_map('formatCampaignRow', $rows)]);
+    }
+
+    if ($method === 'POST') {
+        $b = readJsonBody();
+        $row = buildCampaignDbRow($b, true);
+        insertFilteredRow($pdo, 'campaigns', $row, false);
+        $stmt = $pdo->prepare('SELECT * FROM campaigns WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $row['id']]);
+        $saved = $stmt->fetch();
+        jsonResponse(201, ['item' => $saved ? formatCampaignRow($saved) : array_merge($b, ['id' => $row['id']])]);
+    }
+
+    if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
+        $b = readJsonBody();
+        $patch = buildCampaignDbRow($b, false);
+        updateFilteredRow($pdo, 'campaigns', $itemId, $patch);
+        $stmt = $pdo->prepare('SELECT * FROM campaigns WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $itemId]);
+        $saved = $stmt->fetch();
+        jsonResponse(200, ['ok' => true, 'item' => $saved ? formatCampaignRow($saved) : null]);
+    }
+
+    if ($method === 'DELETE' && $itemId) {
+        $stmt = $pdo->prepare('DELETE FROM campaigns WHERE id = :id');
+        $stmt->execute([':id' => $itemId]);
+        jsonResponse(200, ['ok' => true]);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// 15. Inventário OOH — Outdoors (/api/outdoors)
+// ----------------------------------------------------------------------------
+if ($resource === 'outdoors') {
+    $pdo = getPdo($config);
+    requireAuth($pdo);
+
+    if ($method === 'GET') {
+        $rows = $pdo->query('SELECT * FROM outdoor_points ORDER BY code ASC LIMIT 300')->fetchAll();
+        jsonResponse(200, ['items' => array_map('formatOutdoorRow', $rows)]);
+    }
+
+    if ($method === 'POST') {
+        $b = readJsonBody();
+        $row = buildOutdoorDbRow($b, true);
+        insertFilteredRow($pdo, 'outdoor_points', $row, false);
+        $stmt = $pdo->prepare('SELECT * FROM outdoor_points WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $row['id']]);
+        $saved = $stmt->fetch();
+        jsonResponse(201, ['item' => $saved ? formatOutdoorRow($saved) : array_merge($b, ['id' => $row['id']])]);
+    }
+
+    if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
+        $b = readJsonBody();
+        $patch = buildOutdoorDbRow($b, false);
+        updateFilteredRow($pdo, 'outdoor_points', $itemId, $patch);
+        $stmt = $pdo->prepare('SELECT * FROM outdoor_points WHERE id = :id LIMIT 1');
+        $stmt->execute([':id' => $itemId]);
+        $saved = $stmt->fetch();
+        jsonResponse(200, ['ok' => true, 'item' => $saved ? formatOutdoorRow($saved) : null]);
+    }
+
+    if ($method === 'DELETE' && $itemId) {
+        $stmt = $pdo->prepare('DELETE FROM outdoor_points WHERE id = :id');
+        $stmt->execute([':id' => $itemId]);
+        jsonResponse(200, ['ok' => true]);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// 16. Usuários (/api/usuarios) — Protegido para Super Admin / Admin
 // ----------------------------------------------------------------------------
 if ($resource === 'usuarios') {
     $pdo = getPdo($config);
-    requireAdmin($pdo);
+    $currentAdmin = requireAdmin($pdo);
 
     if ($method === 'GET') {
         $rows = $pdo->query(
@@ -556,37 +1522,118 @@ if ($resource === 'usuarios') {
         $email = strtolower(trim((string) ($b['email'] ?? '')));
         $password = (string) ($b['password'] ?? '');
         if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($password) < 6) {
-            jsonResponse(400, ['error' => 'E-mail inválido ou senha muito curta.']);
+            jsonResponse(400, ['error' => 'E-mail inválido ou senha muito curta (mínimo 6 caracteres).']);
         }
         $id = trim((string) ($b['id'] ?? ('usr-' . time())));
-        $stmt = $pdo->prepare(
-            'INSERT INTO users
-             (id, name, role, hierarchy_level, department, email, phone, password_hash, avatar_url, bio, linked_client_name, allowed_modules_json, permissions_json, active)
-             VALUES
-             (:id, :name, :role, :level, :dept, :email, :phone, :hash, :avatar, :bio, :client, :mods, :perms, :active)'
+        try {
+            $stmt = $pdo->prepare(
+                'INSERT INTO users
+                 (id, name, role, hierarchy_level, department, email, phone, password_hash, avatar_url, bio, linked_client_name, allowed_modules_json, permissions_json, active)
+                 VALUES
+                 (:id, :name, :role, :level, :dept, :email, :phone, :hash, :avatar, :bio, :client, :mods, :perms, :active)'
+            );
+            $stmt->execute([
+                ':id' => $id,
+                ':name' => trim((string) ($b['name'] ?? '')),
+                ':role' => trim((string) ($b['role'] ?? 'Executivo Comercial')),
+                ':level' => (int) ($b['hierarchyLevel'] ?? 4),
+                ':dept' => trim((string) ($b['department'] ?? 'Operações FortMídia')),
+                ':email' => $email,
+                ':phone' => trim((string) ($b['phone'] ?? '')),
+                ':hash' => password_hash($password, PASSWORD_BCRYPT),
+                ':avatar' => (string) ($b['avatarUrl'] ?? ''),
+                ':bio' => (string) ($b['bio'] ?? ''),
+                ':client' => !empty($b['linkedClientName']) ? (string) $b['linkedClientName'] : null,
+                ':mods' => json_encode($b['allowedModules'] ?? [], JSON_UNESCAPED_UNICODE),
+                ':perms' => json_encode($b['permissions'] ?? [], JSON_UNESCAPED_UNICODE),
+                ':active' => !isset($b['active']) || $b['active'] ? 1 : 0,
+            ]);
+        } catch (PDOException $e) {
+            if ((string) $e->getCode() === '23000') {
+                jsonResponse(409, ['error' => 'Já existe um usuário cadastrado com este e-mail ou ID.']);
+            }
+            jsonResponse(500, ['error' => 'Erro ao cadastrar usuário no MySQL.']);
+        }
+
+        $sel = $pdo->prepare(
+            'SELECT id, name, role, hierarchy_level, department, email, phone, avatar_url, bio,
+                    linked_client_name, allowed_modules_json, permissions_json, active
+               FROM users WHERE id = :id LIMIT 1'
         );
-        $stmt->execute([
-            ':id' => $id,
-            ':name' => trim((string) ($b['name'] ?? '')),
-            ':role' => trim((string) ($b['role'] ?? 'Executivo Comercial')),
-            ':level' => (int) ($b['hierarchyLevel'] ?? 4),
-            ':dept' => trim((string) ($b['department'] ?? 'Operações FortMídia')),
-            ':email' => $email,
-            ':phone' => trim((string) ($b['phone'] ?? '')),
-            ':hash' => password_hash($password, PASSWORD_BCRYPT),
-            ':avatar' => (string) ($b['avatarUrl'] ?? ''),
-            ':bio' => (string) ($b['bio'] ?? ''),
-            ':client' => $b['linkedClientName'] ?? null,
-            ':mods' => json_encode($b['allowedModules'] ?? []),
-            ':perms' => json_encode($b['permissions'] ?? []),
-            ':active' => !isset($b['active']) || $b['active'] ? 1 : 0,
-        ]);
-        jsonResponse(201, ['ok' => true, 'id' => $id]);
+        $sel->execute([':id' => $id]);
+        $saved = $sel->fetch();
+        jsonResponse(201, ['ok' => true, 'id' => $id, 'item' => $saved ? formatUserRow($saved) : null]);
+    }
+
+    if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
+        $b = readJsonBody();
+        $patch = [];
+
+        if (array_key_exists('name', $b)) $patch['name'] = trim((string) $b['name']);
+        if (array_key_exists('role', $b)) $patch['role'] = trim((string) $b['role']);
+        if (array_key_exists('hierarchyLevel', $b)) $patch['hierarchy_level'] = (int) $b['hierarchyLevel'];
+        if (array_key_exists('department', $b)) $patch['department'] = trim((string) $b['department']);
+        if (array_key_exists('email', $b)) {
+            $email = strtolower(trim((string) $b['email']));
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                jsonResponse(400, ['error' => 'E-mail informado é inválido.']);
+            }
+            $patch['email'] = $email;
+        }
+        if (array_key_exists('phone', $b)) $patch['phone'] = trim((string) $b['phone']);
+        if (array_key_exists('avatarUrl', $b)) $patch['avatar_url'] = (string) $b['avatarUrl'];
+        if (array_key_exists('bio', $b)) $patch['bio'] = (string) $b['bio'];
+        if (array_key_exists('linkedClientName', $b)) {
+            $patch['linked_client_name'] = !empty($b['linkedClientName']) ? (string) $b['linkedClientName'] : null;
+        }
+        if (array_key_exists('allowedModules', $b)) {
+            $patch['allowed_modules_json'] = json_encode($b['allowedModules'] ?? [], JSON_UNESCAPED_UNICODE);
+        }
+        if (array_key_exists('permissions', $b)) {
+            $patch['permissions_json'] = json_encode($b['permissions'] ?? [], JSON_UNESCAPED_UNICODE);
+        }
+        if (array_key_exists('active', $b)) {
+            $patch['active'] = $b['active'] ? 1 : 0;
+        }
+        if (array_key_exists('password', $b) && trim((string) $b['password']) !== '') {
+            $newPassword = (string) $b['password'];
+            if (strlen($newPassword) < 6) {
+                jsonResponse(400, ['error' => 'A nova senha deve ter pelo menos 6 caracteres.']);
+            }
+            $patch['password_hash'] = password_hash($newPassword, PASSWORD_BCRYPT);
+        }
+
+        try {
+            updateFilteredRow($pdo, 'users', $itemId, $patch);
+        } catch (PDOException $e) {
+            if ((string) $e->getCode() === '23000') {
+                jsonResponse(409, ['error' => 'Este e-mail já está em uso por outro usuário.']);
+            }
+            jsonResponse(500, ['error' => 'Erro ao atualizar usuário no MySQL.']);
+        }
+
+        $sel = $pdo->prepare(
+            'SELECT id, name, role, hierarchy_level, department, email, phone, avatar_url, bio,
+                    linked_client_name, allowed_modules_json, permissions_json, active
+               FROM users WHERE id = :id LIMIT 1'
+        );
+        $sel->execute([':id' => $itemId]);
+        $saved = $sel->fetch();
+        jsonResponse(200, ['ok' => true, 'item' => $saved ? formatUserRow($saved) : null]);
+    }
+
+    if ($method === 'DELETE' && $itemId) {
+        if ($itemId === $currentAdmin['id']) {
+            jsonResponse(400, ['error' => 'Não é permitido excluir o próprio usuário atualmente conectado.']);
+        }
+        $stmt = $pdo->prepare('DELETE FROM users WHERE id = :id');
+        $stmt->execute([':id' => $itemId]);
+        jsonResponse(200, ['ok' => true]);
     }
 }
 
 // ----------------------------------------------------------------------------
-// 11. Proxy Seguro de IA (/api/ai) — GEMINI_API_KEY lida APENAS no servidor
+// 17. Proxy Seguro de IA (/api/ai) — GEMINI_API_KEY lida APENAS no servidor
 // ----------------------------------------------------------------------------
 if ($resource === 'ai' && $method === 'POST') {
     $pdo = getPdo($config);
