@@ -1,0 +1,12 @@
+node_modules/
+build/
+dist/
+dist-fortmidia/
+dist-fortnews/
+release/
+coverage/
+.gmp_cache/
+.DS_Store
+*.log
+.env*
+!.env.example

@@ -1,0 +1,76 @@
+# ==============================================================================
+# FortMídia CRM & Portal FortNews — Apache / cPanel SPA (.htaccess)
+# Raiz de produção: /home/fo181274/fortmidia.com.br (e fortnews.com.br)
+# Suporta rotas React/Vite sem quebrar arquivos estáticos, /api/ nem /.well-known/
+# ==============================================================================
+
+Options -Indexes -MultiViews
+DirectoryIndex index.html
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # 1. NUNCA interceptar validações SSL (cPanel AutoSSL / Let's Encrypt /.well-known/)
+  RewriteRule ^\.well-known(/|$) - [L,NC]
+
+  # 2. Forçar HTTPS mantendo /.well-known/ acessível em HTTP para renovação AutoSSL
+  RewriteCond %{HTTPS} !=on
+  RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+  RewriteCond %{REQUEST_URI} !^/\.well-known/ [NC]
+  RewriteRule ^(.*)$ https://%{HTTP_HOST}/$1 [L,R=301]
+
+  # 3. NUNCA interceptar rotas do backend PHP REST API (/api/) nem /cgi-bin/
+  RewriteRule ^(api|cgi-bin)(/|$) - [L,NC]
+
+  # 4. Servir diretamente arquivos estáticos, diretórios e symlinks reais
+  #    (JS, CSS, imagens, vídeos, fontes, manifest, robots.txt, etc.)
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d [OR]
+  RewriteCond %{REQUEST_FILENAME} -l
+  RewriteRule ^ - [L]
+
+  # 5. Evitar retornar HTML quando um arquivo estático ausente for requisitado em /assets/
+  RewriteCond %{REQUEST_URI} ^/assets/ [NC]
+  RewriteRule ^ - [R=404,L]
+
+  # 6. Fallback SPA: encaminhar todas as rotas internas (/admin, /crm, /fortnews, etc.) para index.html
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# Bloquear acesso HTTP direto a arquivos sensíveis (mantendo .well-known liberado)
+<FilesMatch "(^\.env|\.sql$|\.ya?ml$|composer\.(json|lock)$|package(-lock)?\.json$)">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# Cache inteligente: index.html sempre fresco, assets com hash em cache longo
+<IfModule mod_headers.c>
+  <FilesMatch "^index\.html$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </FilesMatch>
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "SAMEORIGIN"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/html "access plus 0 seconds"
+  ExpiresByType image/jpeg "access plus 1 year"
+  ExpiresByType image/png "access plus 1 year"
+  ExpiresByType image/webp "access plus 1 year"
+  ExpiresByType image/svg+xml "access plus 1 year"
+  ExpiresByType image/x-icon "access plus 1 year"
+  ExpiresByType video/mp4 "access plus 1 year"
+  ExpiresByType text/css "access plus 1 year"
+  ExpiresByType application/javascript "access plus 1 year"
+  ExpiresByType font/woff2 "access plus 1 year"
+</IfModule>

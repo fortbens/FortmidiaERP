@@ -1,0 +1,289 @@
+name: Deploy FortMidiaCrm -> cPanel (/home/fo181274/fortmidia.com.br)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      target_site:
+        description: "Qual domínio publicar no cPanel HomeHost?"
+        required: true
+        default: "fortmidia"
+        type: choice
+        options:
+          - fortmidia
+          - all
+          - fortnews
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build Produção (Vite dist/ + Pacote ZIP cPanel)
+    steps:
+      - name: Checkout fortbens/FortMidiaCrm
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Instalar dependências
+        run: npm install --no-audit --no-fund --legacy-peer-deps
+
+      - name: Validar TypeScript (lint)
+        run: npm run lint
+
+      - name: Compilar produção (dist/) e gerar ZIP pronto para cPanel
+        run: npm run build:zip
+        env:
+          VITE_APP_ENV: production
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || '/api' }}
+          VITE_BASE_PATH: "/"
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
+
+      - name: Verificar arquivos essenciais na raiz de dist/
+        run: |
+          test -f dist/index.html
+          test -f dist/.htaccess
+          test -f release/fortmidia-cpanel-dist.zip
+          ls -la dist/
+          ls -lh release/fortmidia-cpanel-dist.zip
+
+      # IMPORTANTE: passar caminho único "dist" (sem listar dist/.htaccess separado)
+      # para evitar que o actions/upload-artifact@v4 crie uma subpasta dupla dist/dist/.
+      - name: Upload artifact dist/ (raiz limpa com .htaccess)
+        uses: actions/upload-artifact@v4
+        with:
+          name: fortmidia-dist
+          path: dist
+          include-hidden-files: true
+          retention-days: 7
+
+      - name: Upload pacote .zip pronto para extrair no cPanel
+        uses: actions/upload-artifact@v4
+        with:
+          name: fortmidia-cpanel-zip
+          path: release/fortmidia-cpanel-dist.zip
+          retention-days: 14
+
+  deploy-fortmidia:
+    needs: build
+    if: github.event_name == 'push' || github.event.inputs.target_site == 'all' || github.event.inputs.target_site == 'fortmidia'
+    runs-on: ubuntu-latest
+    name: Publicar direto em /home/fo181274/fortmidia.com.br (SSH ou FTPS)
+    steps:
+      - name: Baixar dist/ compilado
+        uses: actions/download-artifact@v4
+        with:
+          name: fortmidia-dist
+          path: ./dist-release
+
+      - name: Garantir que index.html e .htaccess estão na raiz do pacote
+        run: |
+          test -f ./dist-release/index.html
+          test -f ./dist-release/.htaccess
+          ls -la ./dist-release
+
+      - name: Detectar método de envio (SSH/rsync ou FTPS)
+        id: transport
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          if [ -n "$SSH_HOST" ] && [ -n "$SSH_USER" ] && [ -n "$SSH_KEY" ]; then
+            echo "mode=ssh" >> "$GITHUB_OUTPUT"
+            echo "Método selecionado: SSH/rsync direto para /home/fo181274/fortmidia.com.br"
+          elif [ -n "$FTP_SERVER" ] && [ -n "$FTP_USERNAME" ] && [ -n "$FTP_PASSWORD" ]; then
+            echo "mode=ftp" >> "$GITHUB_OUTPUT"
+            echo "Método selecionado: FTPS direto para fortmidia.com.br"
+          else
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Opção A (Preferencial): Envio direto via SSH/rsync para /home/fo181274/fortmidia.com.br
+      - name: Enviar dist/ via SSH/rsync para /home/fo181274/fortmidia.com.br
+        if: steps.transport.outputs.mode == 'ssh'
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_TARGET_DIR: ${{ secrets.SSH_DIR_FORTMIDIA || '/home/fo181274/fortmidia.com.br/' }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          rsync -avz --delete \
+            --exclude='.well-known/' \
+            --exclude='api/' \
+            --exclude='cgi-bin/' \
+            --exclude='.git/' \
+            -e "ssh -i ~/.ssh/id_deploy -p $SSH_PORT -o StrictHostKeyChecking=no" \
+            ./dist-release/ "${SSH_USER}@${SSH_HOST}:${SSH_TARGET_DIR}"
+
+      # Opção B: Envio direto via FTPS (sem depender da fila do Git do cPanel)
+      # ATENÇÃO ao caminho FTP_DIR_FORTMIDIA:
+      # - Conta principal cPanel (fo181274): use "/fortmidia.com.br/"
+      # - Conta FTP criada especificamente para fortmidia.com.br (jailed): defina secret FTP_DIR_FORTMIDIA="/"
+      - name: Enviar dist/ via FTPS para fortmidia.com.br
+        if: steps.transport.outputs.mode == 'ftp'
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          port: ${{ secrets.FTP_PORT || '21' }}
+          local-dir: ./dist-release/
+          server-dir: ${{ secrets.FTP_DIR_FORTMIDIA || '/fortmidia.com.br/' }}
+          protocol: ftps
+          security: loose
+          dangerous-clean-slate: false
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/.well-known/**
+            **/node_modules/**
+            **/api/**
+            **/cgi-bin/**
+
+      - name: Avisar claramente se nenhum Secret SSH/FTP estiver configurado
+        if: steps.transport.outputs.mode == 'none'
+        run: |
+          echo "::warning::Deploy automático NÃO enviado: configure os Secrets FTP (FTP_SERVER, FTP_USERNAME, FTP_PASSWORD) ou SSH (SSH_HOST, SSH_USER, SSH_KEY) em Settings -> Secrets and variables -> Actions no repositório fortbens/FortMidiaCrm. Enquanto isso, baixe o artifact 'fortmidia-cpanel-zip' desta execução e extraia diretamente em /home/fo181274/fortmidia.com.br."
+          {
+            echo "### ⚠️ Build concluído, mas o envio automático para o cPanel está pendente de Secrets"
+            echo ""
+            echo "A pasta \`/home/fo181274/fortmidia.com.br\` **não foi atualizada** porque o repositório \`${{ github.repository }}\` ainda não possui Secrets de **FTP** ou **SSH** configurados."
+            echo ""
+            echo "#### Opção 1 — Upload manual em 30 segundos (sem Secrets):"
+            echo "1. Baixe o artifact **\`fortmidia-cpanel-zip\`** no fim desta página."
+            echo "2. No cPanel -> Gerenciador de Arquivos, abra \`/home/fo181274/fortmidia.com.br\`."
+            echo "3. Carregue e clique em **Extract (Extrair)** — \`index.html\` e \`.htaccess\` já ficam na raiz."
+            echo ""
+            echo "#### Opção 2 — Ativar deploy automático via FTPS (Settings -> Secrets -> Actions):"
+            echo "- \`FTP_SERVER\` (ex.: \`ftp.fortmidia.com.br\` ou hostname do servidor HomeHost)"
+            echo "- \`FTP_USERNAME\` (usuário cPanel \`fo181274\` ou conta FTP criada)"
+            echo "- \`FTP_PASSWORD\` (senha da conta FTP)"
+            echo "- \`FTP_DIR_FORTMIDIA\` *(opcional)*: \`/fortmidia.com.br/\` para usuário principal \`fo181274\` ou \`/\` se a conta FTP já apontar direto para a pasta do domínio."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-fortnews:
+    needs: build
+    if: (github.event_name == 'push' || github.event.inputs.target_site == 'all' || github.event.inputs.target_site == 'fortnews') && vars.ENABLE_CPANEL_FORTNEWS != 'false'
+    runs-on: ubuntu-latest
+    name: Publicar direto em /home/fo181274/fortnews.com.br (SSH ou FTPS)
+    steps:
+      - name: Baixar dist/ compilado
+        uses: actions/download-artifact@v4
+        with:
+          name: fortmidia-dist
+          path: ./dist-release
+
+      - name: Detectar método de envio FortNews
+        id: transport-fn
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          FTP_SERVER: ${{ secrets.FTP_SERVER_FORTNEWS || secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME_FORTNEWS || secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD_FORTNEWS || secrets.FTP_PASSWORD }}
+        run: |
+          if [ -n "$SSH_HOST" ] && [ -n "$SSH_USER" ] && [ -n "$SSH_KEY" ]; then
+            echo "mode=ssh" >> "$GITHUB_OUTPUT"
+          elif [ -n "$FTP_SERVER" ] && [ -n "$FTP_USERNAME" ] && [ -n "$FTP_PASSWORD" ]; then
+            echo "mode=ftp" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enviar dist/ via SSH/rsync para /home/fo181274/fortnews.com.br
+        if: steps.transport-fn.outputs.mode == 'ssh'
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_TARGET_DIR: ${{ secrets.SSH_DIR_FORTNEWS || '/home/fo181274/fortnews.com.br/' }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          rsync -avz --delete \
+            --exclude='.well-known/' \
+            --exclude='api/' \
+            --exclude='cgi-bin/' \
+            --exclude='.git/' \
+            -e "ssh -i ~/.ssh/id_deploy -p $SSH_PORT -o StrictHostKeyChecking=no" \
+            ./dist-release/ "${SSH_USER}@${SSH_HOST}:${SSH_TARGET_DIR}"
+
+      - name: Enviar dist/ via FTPS para fortnews.com.br
+        if: steps.transport-fn.outputs.mode == 'ftp'
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER_FORTNEWS || secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME_FORTNEWS || secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD_FORTNEWS || secrets.FTP_PASSWORD }}
+          port: ${{ secrets.FTP_PORT || '21' }}
+          local-dir: ./dist-release/
+          server-dir: ${{ secrets.FTP_DIR_FORTNEWS || '/fortnews.com.br/' }}
+          protocol: ftps
+          security: loose
+          dangerous-clean-slate: false
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/.well-known/**
+            **/node_modules/**
+            **/api/**
+            **/cgi-bin/**
+
+  publish-cpanel-branch:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Atualizar branch cpanel-deploy (Backup dist/ + .cpanel.yml)
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout .cpanel.yml
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Baixar dist/ compilado
+        uses: actions/download-artifact@v4
+        with:
+          name: fortmidia-dist
+          path: ./prebuilt-dist
+
+      - name: Publicar bundle pré-compilado na branch cpanel-deploy
+        run: |
+          mkdir -p /tmp/cpanel-stage/dist
+          cp -af ./prebuilt-dist/. /tmp/cpanel-stage/dist/
+          cp -af ./.cpanel.yml /tmp/cpanel-stage/.cpanel.yml
+          test -f /tmp/cpanel-stage/.cpanel.yml
+          test -f /tmp/cpanel-stage/dist/index.html
+          test -f /tmp/cpanel-stage/dist/.htaccess
+          cd /tmp/cpanel-stage
+          git init -b cpanel-deploy
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "deploy: dist/ + .cpanel.yml (${{ github.sha }})"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push --force origin cpanel-deploy

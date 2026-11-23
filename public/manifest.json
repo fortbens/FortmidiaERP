@@ -1,0 +1,22 @@
+{
+  "name": "CRM FORTMIDIA",
+  "short_name": "CRM FORTMIDIA",
+  "description": "CRM FORTMIDIA — Gestão comercial, Portal FortNews, Mídia Exterior OOH, FortNews Podcast e Agência 360°.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A0A0A",
+  "theme_color": "#fa6607",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/assets/aistudio/Logo_FortM_dia_ded2b7d7.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__9741accd.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

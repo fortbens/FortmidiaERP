@@ -1,0 +1,11 @@
+---
+deployment:
+  tasks:
+    - export PATH="/opt/cpanel/ea-nodejs22/bin:/opt/cpanel/ea-nodejs20/bin:/opt/cpanel/ea-nodejs18/bin:/usr/local/bin:$PATH"
+    - '[ -f "dist/index.html" ] || (npm install --no-audit --no-fund --legacy-peer-deps && VITE_BASE_PATH=/ npm run build)'
+    - /bin/mkdir -p /home/fo181274/fortmidia.com.br/
+    - /bin/cp -af dist/. /home/fo181274/fortmidia.com.br/
+    - '[ -f "dist/.htaccess" ] && /bin/cp -af dist/.htaccess /home/fo181274/fortmidia.com.br/.htaccess || true'
+    - /bin/mkdir -p /home/fo181274/fortnews.com.br/
+    - /bin/cp -af dist/. /home/fo181274/fortnews.com.br/
+    - '[ -f "dist/.htaccess" ] && /bin/cp -af dist/.htaccess /home/fo181274/fortnews.com.br/.htaccess || true'

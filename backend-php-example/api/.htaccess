@@ -1,0 +1,23 @@
+# Protege arquivos sensíveis dentro de /api/ contra acesso direto via navegador
+<FilesMatch "(^config(\.example)?\.php$|^\.env|\.sql$)">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Garante que o cabeçalho Authorization (Bearer token) chegue ao PHP em ambientes CGI/FastCGI do cPanel
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+  # Redireciona todas as rotas /api/* para index.php
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ index.php [QSA,L]
+</IfModule>

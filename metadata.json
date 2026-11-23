@@ -1,0 +1,6 @@
+{
+  "name": "Grupo FortMídia — Portal Institucional, Vitrine Comercial & Painel Executivo",
+  "description": "Portal institucional, vitrine de cotas comerciais, Canal Fala Cidadão e painel administrativo do Grupo FortMídia e Grupo FortNews na região do CIMBAJU.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
