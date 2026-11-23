@@ -430,6 +430,23 @@ export const stateApi = {
   },
   fetchSnapshot: <TState>() =>
     apiRequest<{ state?: Partial<TState>; updatedAt?: string }>('/state', { timeoutMs: 6000 }),
+  fetchPublicState: async <TState>() => {
+    const res = await apiRequest<{ state?: Record<string, unknown> }>('/public-state', {
+      timeoutMs: 6000,
+      skipAuth: true,
+    });
+    if (res.ok && res.data?.state && typeof res.data.state === 'object') {
+      const rawState = { ...res.data.state };
+      if (Array.isArray(rawState.outdoorPoints)) {
+        rawState.outdoorPoints = (rawState.outdoorPoints as RawRow[]).map(normalizeOutdoor);
+      }
+      return {
+        ...res,
+        data: { state: rawState as Partial<TState> },
+      };
+    }
+    return { ...res, data: undefined } as ApiResult<{ state?: Partial<TState> }>;
+  },
   saveSnapshot: (state: unknown) =>
     apiRequest<{ ok: boolean; updatedAt?: string }>('/state', {
       method: 'PUT',

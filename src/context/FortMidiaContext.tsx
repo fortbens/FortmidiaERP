@@ -358,8 +358,8 @@ const DEFAULT_STATE: FortMidiaState = {
   siteAdsConfig: INITIAL_SITE_ADS_CONFIG,
 };
 
-function hydrateTeamMembers(rawMembers?: TeamMember[]): TeamMember[] {
-  if (!rawMembers || rawMembers.length === 0) return INITIAL_TEAM_MEMBERS;
+function hydrateTeamMembers(rawMembers?: TeamMember[], allowFallback = true): TeamMember[] {
+  if (!rawMembers || rawMembers.length === 0) return allowFallback ? INITIAL_TEAM_MEMBERS : [];
   const migrated = rawMembers
     .filter((m) => !(m.id === 'usr-02' && m.name.toLowerCase().includes('emerson carneiro')))
     .map((m) => {
@@ -405,7 +405,7 @@ function hydrateTeamMembers(rawMembers?: TeamMember[]): TeamMember[] {
         permissions: m.permissions ?? { ...preset.permissions },
       };
     });
-  return migrated.length > 0 ? migrated : INITIAL_TEAM_MEMBERS;
+  return migrated.length > 0 ? migrated : allowFallback ? INITIAL_TEAM_MEMBERS : [];
 }
 
 function hydrateBudgetCatalog(rawCatalog?: BudgetCatalogItem[]): BudgetCatalogItem[] {
@@ -623,6 +623,13 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return false;
       }
 
+      // API MySQL confirmada online: descarta cache local antigo para nunca sobrescrever o banco
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // Ignore storage restrictions
+      }
+
       setApiSyncLoading(true);
       setApiSyncError(null);
 
@@ -630,16 +637,44 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         const hasToken = Boolean(getApiAuthToken());
 
         if (!hasToken) {
-          const publicNewsRes = await newsApi.list();
-          if (publicNewsRes.ok && Array.isArray(publicNewsRes.data?.items)) {
-            skipNextSnapshotSave.current = true;
-            setState((prev) => ({
-              ...prev,
-              pautas: hydratePautasWithInternalCodes(publicNewsRes.data!.items),
-            }));
+          const [publicNewsRes, publicStateRes] = await Promise.all([
+            newsApi.list(),
+            stateApi.fetchPublicState<FortMidiaState>(),
+          ]);
+          const publicSnapshot =
+            publicStateRes.ok && publicStateRes.data?.state ? publicStateRes.data.state : null;
+
+          skipNextSnapshotSave.current = true;
+          setState((prev) => ({
+            ...prev,
+            ...(publicSnapshot ?? {}),
+            pautas:
+              publicNewsRes.ok && Array.isArray(publicNewsRes.data?.items)
+                ? hydratePautasWithInternalCodes(publicNewsRes.data.items)
+                : [],
+            outdoorPoints:
+              publicSnapshot?.outdoorPoints && publicSnapshot.outdoorPoints.length > 0
+                ? publicSnapshot.outdoorPoints
+                : prev.outdoorPoints,
+            siteSettings: { ...prev.siteSettings, ...(publicSnapshot?.siteSettings ?? {}) },
+            newsPortalSettings: {
+              ...prev.newsPortalSettings,
+              ...(publicSnapshot?.newsPortalSettings ?? {}),
+            },
+            // Remove mocks privados da memória enquanto não autenticado no MySQL
+            contracts: [],
+            leads: [],
+            financialEntries: [],
+            citizenReports: [],
+            clientTasks: [],
+          }));
+          if (!publicNewsRes.ok) {
+            setApiSyncError(
+              `Erro ao consultar matérias no MySQL (HTTP ${publicNewsRes.status || 'rede'}): ${publicNewsRes.error || 'falha na API'}`
+            );
           }
           hasHydratedFromApi.current = true;
-          return true;
+          return publicNewsRes.ok;
         }
 
         const [
@@ -711,7 +746,7 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             : null;
         const nextUsers =
           usersRes.ok && Array.isArray(usersRes.data?.items)
-            ? hydrateTeamMembers(usersRes.data.items)
+            ? hydrateTeamMembers(usersRes.data.items, false)
             : null;
 
         skipNextSnapshotSave.current = true;
@@ -719,7 +754,12 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           const snapshot =
             snapshotRes.ok && snapshotRes.data?.state ? snapshotRes.data.state : null;
 
-          let resolvedMembers = nextUsers ?? (snapshot?.teamMembers ? hydrateTeamMembers(snapshot.teamMembers) : prev.teamMembers);
+          let resolvedMembers =
+            nextUsers !== null
+              ? nextUsers
+              : snapshot?.teamMembers
+                ? hydrateTeamMembers(snapshot.teamMembers, false)
+                : [];
           if (authenticatedUser?.id) {
             const exists = resolvedMembers.some(
               (m) =>
@@ -806,11 +846,10 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
         const contractsCount = nextContracts?.length ?? 0;
         const leadsCount = nextLeads?.length ?? 0;
-        const pautasCount = nextPautas?.length ?? 0;
-        setIsDatabaseEmpty(contractsCount === 0 && leadsCount === 0 && pautasCount === 0);
+        setIsDatabaseEmpty(contractsCount === 0 && leadsCount === 0);
 
         if (errors.length > 0) {
-          setApiSyncError(`Avisos ao carregar dados do MySQL: ${errors.join(' · ')}`);
+          setApiSyncError(`Erro ao carregar tabelas do MySQL: ${errors.join(' · ')}`);
         }
 
         hasHydratedFromApi.current = true;
@@ -958,9 +997,9 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [refreshFromMysql]);
 
   useEffect(() => {
-    // Em ambiente offline/preview sem API PHP, persiste em localStorage;
-    // quando a API MySQL está online, o banco MySQL é a fonte de verdade.
-    if (apiMode !== 'online') {
+    // Só persiste no localStorage quando /api/health confirmou modo offline (preview sem backend PHP).
+    // Nunca grava no localStorage durante 'checking' nem em modo 'online' (MySQL é a única fonte).
+    if (apiMode === 'offline') {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       } catch {
@@ -979,7 +1018,11 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const syncTimer = window.setTimeout(() => {
       void (async () => {
-        const res = await stateApi.saveSnapshot(state);
+        const sanitizedSnapshot: FortMidiaState = {
+          ...state,
+          teamMembers: state.teamMembers.map((m) => ({ ...m, password: '' })),
+        };
+        const res = await stateApi.saveSnapshot(sanitizedSnapshot);
         if (!res.ok && !res.networkUnavailable && res.status !== 404) {
           reportApiError('sincronizar configurações CMS', res);
         }
@@ -2727,61 +2770,60 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const today = new Date().toLocaleDateString('pt-BR');
     const newId = `rptr-${Date.now()}`;
     let linkedUserId = payload.linkedUserId;
+    let createdMember: TeamMember | null = null;
+    const cleanEmail = payload.email.trim().toLowerCase();
 
-    setState((prev) => {
-      let nextTeamMembers = prev.teamMembers;
-      const cleanEmail = payload.email.trim().toLowerCase();
-
-      if (!linkedUserId && cleanEmail) {
-        const existingMember = prev.teamMembers.find(
-          (m) => m.email.toLowerCase() === cleanEmail
-        );
-        if (existingMember) {
-          linkedUserId = existingMember.id;
-        } else if (loginPassword && loginPassword.trim().length >= 4) {
-          const newUserId = `usr-${Date.now()}`;
-          linkedUserId = newUserId;
-          const preset = ROLE_PRESETS['Repórter / Jornalista'];
-          const newMember: TeamMember = {
-            id: newUserId,
-            name: payload.name.trim(),
-            role: 'Repórter / Jornalista',
-            hierarchyLevel: preset.hierarchyLevel,
-            department: `Reportagem · ${payload.city}`,
-            email: payload.email.trim(),
-            phone: payload.phone.trim(),
-            password: loginPassword.trim(),
-            avatarUrl: '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__9741accd.png',
-            bio: `Repórter credenciado FortNews (${payload.beat}).`,
-            active: payload.active,
-            createdAt: today,
-            allowedModules: [...preset.allowedModules],
-            permissions: { ...preset.permissions },
-          };
-          nextTeamMembers = [...prev.teamMembers, newMember];
-        }
+    if (!linkedUserId && cleanEmail) {
+      const existingMember = stateRef.current.teamMembers.find(
+        (m) => m.email.toLowerCase() === cleanEmail
+      );
+      if (existingMember) {
+        linkedUserId = existingMember.id;
+      } else if (loginPassword && loginPassword.trim().length >= 6) {
+        const newUserId = `usr-${Date.now()}`;
+        linkedUserId = newUserId;
+        const preset = ROLE_PRESETS['Repórter / Jornalista'];
+        createdMember = {
+          id: newUserId,
+          name: payload.name.trim(),
+          role: 'Repórter / Jornalista',
+          hierarchyLevel: preset.hierarchyLevel,
+          department: `Reportagem · ${payload.city}`,
+          email: payload.email.trim(),
+          phone: payload.phone.trim(),
+          password: loginPassword.trim(),
+          avatarUrl: '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__9741accd.png',
+          bio: `Repórter credenciado FortNews (${payload.beat}).`,
+          active: payload.active,
+          createdAt: today,
+          allowedModules: [...preset.allowedModules],
+          permissions: { ...preset.permissions },
+        };
       }
+    }
 
-      const created: ReporterProfile = {
-        ...payload,
-        id: newId,
-        linkedUserId,
-        createdAt: today,
-      };
-
-      return {
-        ...prev,
-        teamMembers: nextTeamMembers,
-        reporters: [created, ...prev.reporters],
-      };
-    });
-
-    return {
+    const created: ReporterProfile = {
       ...payload,
       id: newId,
       linkedUserId,
       createdAt: today,
     };
+
+    const prevMembers = stateRef.current.teamMembers;
+    setState((prev) => ({
+      ...prev,
+      teamMembers: createdMember ? [...prev.teamMembers, createdMember] : prev.teamMembers,
+      reporters: [created, ...prev.reporters],
+    }));
+
+    if (createdMember) {
+      const memberToSave = createdMember;
+      runApiMutation('cadastrar usuário do repórter', () => usersApi.create(memberToSave), {
+        onRollback: () => setState((prev) => ({ ...prev, teamMembers: prevMembers })),
+      });
+    }
+
+    return created;
   };
 
   const updateReporter = (id: string, patch: Partial<ReporterProfile>) => {

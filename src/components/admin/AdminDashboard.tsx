@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { ALL_ADMIN_TABS, ROLE_PRESETS } from '../../data/initialData';
 import { useFortMidia } from '../../context/FortMidiaContext';
-import { authApi } from '../../services/api';
+import { authApi, stateApi } from '../../services/api';
 import { AdminTabId } from '../../types/fortmidia';
 import { MediaFrame } from '../MediaFrame';
 import { FortMidiaLogo, OFFICIAL_FORTMIDIA_LOGO_URL } from '../FortMidiaLogo';
@@ -207,7 +207,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return 'Informe usuário e senha para continuar.';
     }
 
-    // 1. Tenta autenticação real na API REST (PHP/MySQL em produção)
+    // 0. Garante verificação de /api/health caso o usuário clique em Entrar antes da checagem inicial concluir
+    let isApiOnline = apiMode === 'online';
+    if (apiMode === 'checking') {
+      const health = await stateApi.health();
+      isApiOnline = Boolean(health.ok && health.data?.ok === true);
+    }
+
+    // 1. Autenticação real na API REST (PHP/MySQL em produção)
     const apiLogin = await authApi.login(rawUsername.trim(), password);
     if (apiLogin.ok && apiLogin.data?.user) {
       const apiUser = apiLogin.data.user;
@@ -219,8 +226,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     // Se a API está online (/api/health ok) ou respondeu com erro HTTP real (401/403/500),
     // nunca faz fallback silencioso para credenciais de demonstração locais.
-    if (apiMode === 'online' || !apiLogin.networkUnavailable) {
-      return apiLogin.error || 'Usuário ou senha inválidos.';
+    if (isApiOnline || !apiLogin.networkUnavailable) {
+      return apiLogin.error || 'Usuário ou senha inválidos no banco MySQL.';
     }
 
     // 2. Fallback automático apenas em ambiente offline/preview sem backend PHP disponível
@@ -371,7 +378,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="flex w-full items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 cursor-pointer text-left"
                 >
                   <Database className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span className="truncate">Sincronizar dados iniciais</span>
+                  <span className="truncate">Popular Dados Iniciais</span>
                 </button>
               )}
             </>
@@ -428,6 +435,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {/* Indicador discreto do status real de conexão com a API PHP/MySQL */}
+            <button
+              type="button"
+              disabled={apiSyncLoading}
+              onClick={() => void refreshFromMysql()}
+              title={
+                apiSyncError
+                  ? `Erro de API: ${apiSyncError}`
+                  : apiMode === 'online'
+                    ? 'Banco MySQL Online (/api/health ok). Clique para recarregar.'
+                    : apiMode === 'checking'
+                      ? 'Verificando conexão com /api/health...'
+                      : 'API PHP /api/health indisponível neste ambiente.'
+              }
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                apiSyncError || apiMode === 'offline'
+                  ? 'border-red-500/40 bg-red-950/50 text-red-200 hover:bg-red-950/70'
+                  : apiMode === 'online'
+                    ? 'border-emerald-500/35 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-950/60'
+                    : 'border-white/15 bg-[#121215] text-zinc-400'
+              }`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full shrink-0 ${
+                  apiSyncError || apiMode === 'offline'
+                    ? 'bg-red-500'
+                    : apiMode === 'online'
+                      ? 'bg-emerald-400'
+                      : 'bg-zinc-500 animate-pulse'
+                }`}
+                aria-hidden="true"
+              />
+              <span>
+                {apiSyncError || apiMode === 'offline'
+                  ? 'Erro de API'
+                  : apiMode === 'online'
+                    ? 'MySQL Conectado'
+                    : 'Verificando MySQL...'}
+              </span>
+            </button>
+
             <button
               type="button"
               onClick={handleCopyDirectUrl}
@@ -606,7 +654,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         className="flex w-full items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300 disabled:opacity-50 cursor-pointer"
                       >
                         <Database className="h-3.5 w-3.5" />
-                        Sincronizar dados iniciais com o MySQL
+                        Popular Dados Iniciais no MySQL
                       </button>
                     )}
                   </>
@@ -719,8 +767,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               >
                 <Database className="h-4 w-4" aria-hidden="true" />
                 {apiSyncLoading
-                  ? 'Sincronizando com MySQL...'
-                  : 'Sincronizar dados iniciais com o MySQL'}
+                  ? 'Populando banco MySQL...'
+                  : 'Popular Dados Iniciais no MySQL'}
               </button>
             </div>
           )}

@@ -903,6 +903,49 @@ if ($resource === 'public-config' && $method === 'GET') {
     ]);
 }
 
+// Estado público somente leitura para os portais FortMídia e FortNews (desktop e celular)
+if ($resource === 'public-state' && $method === 'GET') {
+    $pdo = getPdo($config);
+    $publicState = [];
+
+    if (getTableColumns($pdo, 'app_state_snapshots') !== []) {
+        $stmt = $pdo->prepare(
+            'SELECT payload_json FROM app_state_snapshots WHERE snapshot_key = :k LIMIT 1'
+        );
+        $stmt->execute([':k' => 'fortmidia_portal_state']);
+        $row = $stmt->fetch();
+        if ($row && !empty($row['payload_json'])) {
+            $decoded = json_decode((string) $row['payload_json'], true);
+            if (is_array($decoded)) {
+                $publicAllowlist = [
+                    'siteSettings',
+                    'newsPortalSettings',
+                    'siteAdBanners',
+                    'siteAdsConfig',
+                    'podcastShows',
+                    'quotas',
+                    'galleryItems',
+                    'popupConfig',
+                ];
+                foreach ($publicAllowlist as $key) {
+                    if (array_key_exists($key, $decoded)) {
+                        $publicState[$key] = $decoded[$key];
+                    }
+                }
+            }
+        }
+    }
+
+    if (getTableColumns($pdo, 'outdoor_points') !== []) {
+        $outdoorRows = $pdo->query('SELECT * FROM outdoor_points ORDER BY code ASC LIMIT 300')->fetchAll();
+        if (count($outdoorRows) > 0) {
+            $publicState['outdoorPoints'] = array_map('formatOutdoorRow', $outdoorRows);
+        }
+    }
+
+    jsonResponse(200, ['state' => $publicState]);
+}
+
 // ----------------------------------------------------------------------------
 // 7. Autenticação (/api/auth/setup-admin, /login, /me, /logout)
 // ----------------------------------------------------------------------------
@@ -957,12 +1000,17 @@ if ($resource === 'auth') {
               WHERE LOWER(email) = :exact
                  OR LOWER(SUBSTRING_INDEX(email, "@", 1)) = :prefix
                  OR LOWER(name) = :name_exact
+                 OR LOWER(SUBSTRING_INDEX(name, " ", 1)) = :first_name
+                 OR (:is_admin_alias = 1 AND hierarchy_level = 1)
+              ORDER BY hierarchy_level ASC
               LIMIT 1'
         );
         $stmt->execute([
             ':exact' => $username,
             ':prefix' => $username,
             ':name_exact' => $username,
+            ':first_name' => $username,
+            ':is_admin_alias' => in_array($username, ['admin', 'diretoria'], true) ? 1 : 0,
         ]);
         $row = $stmt->fetch();
 
