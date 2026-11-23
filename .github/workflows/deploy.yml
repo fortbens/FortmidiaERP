@@ -1,4 +1,4 @@
-name: Deploy FortMidiaCrm -> cPanel (/home/fo181274/fortmidia.com.br)
+name: Deploy FortMídia -> cPanel (/home/fo181274/fortmidia.com.br)
 
 on:
   push:
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Build Produção (Vite dist/ + Pacote ZIP cPanel)
     steps:
-      - name: Checkout fortbens/FortMidiaCrm
+      - name: Checkout repositório
         uses: actions/checkout@v4
 
       - name: Setup Node.js 22
@@ -163,7 +163,7 @@ jobs:
       - name: Avisar claramente se nenhum Secret SSH/FTP estiver configurado
         if: steps.transport.outputs.mode == 'none'
         run: |
-          echo "::warning::Deploy automático NÃO enviado: configure os Secrets FTP (FTP_SERVER, FTP_USERNAME, FTP_PASSWORD) ou SSH (SSH_HOST, SSH_USER, SSH_KEY) em Settings -> Secrets and variables -> Actions no repositório fortbens/FortMidiaCrm. Enquanto isso, baixe o artifact 'fortmidia-cpanel-zip' desta execução e extraia diretamente em /home/fo181274/fortmidia.com.br."
+          echo "::warning::Deploy automático NÃO enviado: configure os Secrets FTP (FTP_SERVER, FTP_USERNAME, FTP_PASSWORD) ou SSH (SSH_HOST, SSH_USER, SSH_KEY) em Settings -> Secrets and variables -> Actions no repositório ${{ github.repository }}. Enquanto isso, baixe o artifact 'fortmidia-cpanel-zip' desta execução e extraia diretamente em /home/fo181274/fortmidia.com.br."
           {
             echo "### ⚠️ Build concluído, mas o envio automático para o cPanel está pendente de Secrets"
             echo ""
