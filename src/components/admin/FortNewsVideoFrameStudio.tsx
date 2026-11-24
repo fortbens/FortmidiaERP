@@ -23,6 +23,7 @@ import { PautaSearchPicker } from './PautaSearchPicker';
 import {
   exportFramedVideo,
   FramedVideoExportProgress,
+  preloadVideoFirstFrame,
 } from '../../utils/videoFrameExporter';
 
 export type VideoFrameTemplate = 'reportagem_vertical' | 'news_horizontal';
@@ -314,7 +315,7 @@ function drawVideoClapperIcon(
 
 function drawMediaIntoWindow(
   ctx: CanvasRenderingContext2D,
-  media: HTMLVideoElement | HTMLImageElement | null,
+  media: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement | null,
   x: number,
   y: number,
   w: number,
@@ -332,8 +333,18 @@ function drawMediaIntoWindow(
   ctx.fillRect(x, y, w, h);
 
   if (media) {
-    const mw = media instanceof HTMLVideoElement ? media.videoWidth : media.naturalWidth || media.width;
-    const mh = media instanceof HTMLVideoElement ? media.videoHeight : media.naturalHeight || media.height;
+    const mw =
+      media instanceof HTMLVideoElement
+        ? media.videoWidth
+        : media instanceof HTMLImageElement
+          ? media.naturalWidth || media.width
+          : media.width;
+    const mh =
+      media instanceof HTMLVideoElement
+        ? media.videoHeight
+        : media instanceof HTMLImageElement
+          ? media.naturalHeight || media.height
+          : media.height;
     if (mw > 0 && mh > 0) {
       const baseScale =
         fitMode === 'cover' ? Math.max(w / mw, h / mh) : Math.min(w / mw, h / mh);
@@ -382,11 +393,13 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const logoImgRef = useRef<HTMLImageElement | null>(null);
   const photoImgRef = useRef<HTMLImageElement | null>(null);
+  const videoPosterCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoFileInputRef = useRef<HTMLInputElement | null>(null);
   const photoFileInputRef = useRef<HTMLInputElement | null>(null);
   const logoFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Abort controller for silent background MP4 export
+  // Abort controllers for async video preloading & silent background MP4 export
+  const preloadAbortRef = useRef<AbortController | null>(null);
   const exportAbortRef = useRef<AbortController | null>(null);
 
   // Template & Branding (Official FortNews vertical broadcast frame selected by default)
@@ -430,11 +443,13 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
   const [mediaOffsetY, setMediaOffsetY] = useState(50);
   const [showViewfinder, setShowViewfinder] = useState(true);
 
-  // Video Playback State
+  // Video Playback & Async Preload State
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [videoCurrentTime, setVideoCurrentTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
+  const [isVideoLoading, setIsVideoLoading] = useState(false);
+  const [videoLoadingPhase, setVideoLoadingPhase] = useState('');
 
   // Background Export State (no watching required, progress tracked)
   const [isExporting, setIsExporting] = useState(false);
@@ -505,7 +520,10 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
 
   // Draws ONLY the opaque background + video/photo layer inside the frame's viewport
   const drawMediaLayer = useCallback(
-    (ctx: CanvasRenderingContext2D, mediaEl: HTMLVideoElement | HTMLImageElement | null) => {
+    (
+      ctx: CanvasRenderingContext2D,
+      mediaEl: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement | null
+    ) => {
       const W = CANVAS_W;
       const H = CANVAS_H;
       if (template === 'news_horizontal') {
@@ -1057,15 +1075,23 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     ]
   );
 
-  // Full composite renderer for preview & PNG export (never calls clearRect on live preview!)
+  // Full composite renderer for preview & PNG export (falls back to preloaded first frame so viewport is NEVER black!)
   const drawFrame = useCallback(
     (ctx: CanvasRenderingContext2D, transparentCutout = false) => {
       if (transparentCutout) {
         drawOverlayLayer(ctx, true);
         return;
       }
-      const mediaEl =
-        mediaSourceType === 'video' && videoUrl ? videoElRef.current : photoImgRef.current;
+      let mediaEl: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement | null =
+        photoImgRef.current;
+      if (mediaSourceType === 'video' && videoUrl) {
+        const liveVid = videoElRef.current;
+        if (liveVid && liveVid.readyState >= 2 && liveVid.videoWidth > 0) {
+          mediaEl = liveVid;
+        } else if (videoPosterCanvasRef.current) {
+          mediaEl = videoPosterCanvasRef.current;
+        }
+      }
       drawMediaLayer(ctx, mediaEl);
       drawOverlayLayer(ctx, false);
     },
@@ -1097,27 +1123,59 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     return undefined;
   }, [drawFrame, mediaSourceType, videoUrl, isPlaying]);
 
-  // Cancel any in-flight background export on unmount
+  // Cancel any in-flight preload or export on unmount
   useEffect(() => {
     return () => {
+      preloadAbortRef.current?.abort();
       exportAbortRef.current?.abort();
     };
   }, []);
 
-  const handleUploadVideo = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUploadVideo = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
+
+    // Abort any previous preload in flight
+    preloadAbortRef.current?.abort();
+    const preloadController = new AbortController();
+    preloadAbortRef.current = preloadController;
+
     if (videoUrl && videoUrl.startsWith('blob:')) {
       URL.revokeObjectURL(videoUrl);
     }
+
     const url = URL.createObjectURL(file);
-    setVideoUrl(url);
+    videoPosterCanvasRef.current = null;
+    setIsVideoLoading(true);
+    setVideoLoadingPhase('Carregando vídeo e decodificando primeiro quadro...');
     setVideoFileName(file.name);
-    setMediaSourceType('video');
     setIsPlaying(false);
     setVideoCurrentTime(0);
-    showToast(`Vídeo "${file.name}" carregado na moldura! Dê play ou clique em "Exportar Vídeo".`);
-    e.target.value = '';
+    setVideoDuration(0);
+    setVideoUrl(url);
+    setMediaSourceType('video');
+
+    try {
+      const preloaded = await preloadVideoFirstFrame(url, preloadController.signal);
+      if (preloadController.signal.aborted) return;
+
+      videoPosterCanvasRef.current = preloaded.posterCanvas;
+      setVideoDuration(preloaded.duration);
+      setAssetsTick((t) => t + 1);
+      setIsVideoLoading(false);
+      setVideoLoadingPhase('');
+      showToast(
+        `Vídeo "${file.name}" carregado e pronto! Clique em "Exportar Vídeo Pronto (MP4 com Áudio)".`
+      );
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      setIsVideoLoading(false);
+      setVideoLoadingPhase('');
+      showToast(
+        `Vídeo "${file.name}" carregado. Se a prévia não aparecer, converta para MP4 (H.264).`
+      );
+    }
   };
 
   const handleUploadPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1830,14 +1888,57 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
               </span>
             </div>
 
-            {/* 9:16 Live Canvas Preview */}
-            <div className="mx-auto w-full max-w-[340px] overflow-hidden rounded-xl border border-white/15 bg-black shadow-xl">
+            {/* 9:16 Live Canvas Preview + Visual Preloader Overlay (zero black screen on load/export) */}
+            <div className="relative mx-auto w-full max-w-[340px] overflow-hidden rounded-xl border border-white/15 bg-zinc-950 shadow-xl">
               <canvas
                 ref={canvasRef}
                 width={CANVAS_W}
                 height={CANVAS_H}
                 className="block w-full h-auto"
               />
+
+              {(isVideoLoading || isExporting) && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-zinc-950/80 backdrop-blur-sm px-6 text-center"
+                >
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-[#fa6607]/40 bg-[#fa6607]/15 shadow-lg">
+                    <Loader2
+                      className="h-7 w-7 animate-spin text-[#fa6607]"
+                      aria-hidden="true"
+                    />
+                  </div>
+
+                  <p className="mt-4 text-xs font-bold uppercase tracking-wider text-white">
+                    {isExporting
+                      ? 'Preparando Download MP4'
+                      : 'Carregando Vídeo'}
+                  </p>
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-300">
+                    {isExporting
+                      ? exportProgress?.phase || 'Decodificando quadros e áudio original...'
+                      : videoLoadingPhase || 'Decodificando primeiro quadro...'}
+                  </p>
+
+                  {isExporting && (
+                    <div className="mt-4 w-full max-w-[220px] space-y-1.5">
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-white/15">
+                        <div
+                          className="h-full rounded-full bg-[#fa6607] transition-all duration-150"
+                          style={{ width: `${Math.max(4, exportProgress?.percent ?? 4)}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between font-mono text-[10px] text-zinc-300 tabular-nums">
+                        <span>MP4 · 1080×1920</span>
+                        <span className="font-bold text-[#fa6607]">
+                          {exportProgress?.percent ?? 0}%
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Video Playback Bar (when video is uploaded) */}
@@ -1941,11 +2042,17 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleExportFramedVideo}
-                  disabled={!videoUrl || mediaSourceType !== 'video'}
+                  disabled={!videoUrl || mediaSourceType !== 'video' || isVideoLoading}
                   className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-45 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  <Film className="h-4 w-4" aria-hidden="true" />
-                  Exportar Vídeo Pronto com Moldura (MP4 com Áudio)
+                  {isVideoLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Film className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  {isVideoLoading
+                    ? 'Preparando vídeo...'
+                    : 'Exportar Vídeo Pronto com Moldura (MP4 com Áudio)'}
                 </button>
               )}
 
