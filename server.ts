@@ -4,7 +4,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { GoogleGenAI } from '@google/genai';
 
-const PORT = Number(process.env.PORT || 3000);
+function readCliArg(flag: string): string | undefined {
+  const idx = process.argv.indexOf(flag);
+  if (idx !== -1 && process.argv[idx + 1]) {
+    return process.argv[idx + 1];
+  }
+  const prefixed = process.argv.find((arg) => arg.startsWith(`${flag}=`));
+  return prefixed ? prefixed.slice(flag.length + 1) : undefined;
+}
+
+const PORT = Number(readCliArg('--port') || process.env.PORT || 3000);
+const HOST = readCliArg('--host') || process.env.HOST || '0.0.0.0';
 const isProduction = process.env.NODE_ENV === 'production';
 
 const VALID_SEALS = [
@@ -314,7 +324,12 @@ async function startServer() {
   app.use(express.json({ limit: '2mb' }));
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'fortmidia-fortnews-erp', timestamp: new Date().toISOString() });
+    res.json({
+      ok: true,
+      database: false,
+      service: 'fortmidia-fortnews-erp-preview',
+      timestamp: new Date().toISOString(),
+    });
   });
 
   app.get('/api/public-config', (_req, res) => {
@@ -748,9 +763,15 @@ Retorne EXCLUSIVAMENTE um JSON Array de strings (sem markdown ou texto fora do a
   });
 
   if (!isProduction) {
+    const disableHmr = process.env.DISABLE_HMR === 'true';
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        hmr: !disableHmr,
+        watch: disableHmr ? null : undefined,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -767,9 +788,12 @@ Retorne EXCLUSIVAMENTE um JSON Array de strings (sem markdown ou texto fora do a
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`FortMídia & FortNews server running on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`FortMídia & FortNews server running on http://${HOST}:${PORT}`);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('Failed to start FortMídia & FortNews server:', err);
+  process.exit(1);
+});

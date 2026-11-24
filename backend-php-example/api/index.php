@@ -38,9 +38,10 @@ $allowedOrigins = $config['allowed_origins'] ?? [
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 if ($origin !== '' && in_array($origin, $allowedOrigins, true)) {
     header('Access-Control-Allow-Origin: ' . $origin);
+    header('Access-Control-Allow-Credentials: true');
     header('Vary: Origin');
     header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    header('Access-Control-Allow-Headers: Content-Type, Authorization, Accept');
+    header('Access-Control-Allow-Headers: Content-Type, Authorization, Accept, X-Requested-With');
     header('Access-Control-Max-Age: 86400');
 }
 
@@ -104,10 +105,10 @@ function getPdo(array $config): PDO
  * Retorna os nomes de colunas disponíveis na tabela (whitelist contra SQL injection
  * e compatibilidade retroativa com bancos que ainda não rodaram os ALTER TABLE opcionais).
  */
-function getTableColumns(PDO $pdo, string $table): array
+function getTableColumns(PDO $pdo, string $table, bool $forceRefresh = false): array
 {
     static $cache = [];
-    if (isset($cache[$table])) {
+    if (!$forceRefresh && isset($cache[$table])) {
         return $cache[$table];
     }
 
@@ -141,6 +142,50 @@ function getTableColumns(PDO $pdo, string $table): array
     } catch (Throwable) {
         $cache[$table] = [];
         return [];
+    }
+}
+
+function ensureUsersLoginNameColumn(PDO $pdo): array
+{
+    $cols = getTableColumns($pdo, 'users');
+    if (isset($cols['login_name'])) {
+        return $cols;
+    }
+    try {
+        $pdo->exec('ALTER TABLE `users` ADD COLUMN `login_name` VARCHAR(80) DEFAULT NULL AFTER `name`');
+        try {
+            $pdo->exec('CREATE UNIQUE INDEX `idx_users_login_name` ON `users` (`login_name`)');
+        } catch (Throwable) {
+            // Índice já existente ou sem permissão de índice
+        }
+        return getTableColumns($pdo, 'users', true);
+    } catch (Throwable) {
+        return $cols;
+    }
+}
+
+function ensureUserSessionsTable(PDO $pdo): void
+{
+    if (getTableColumns($pdo, 'user_sessions') !== []) {
+        return;
+    }
+    try {
+        $pdo->exec(
+            'CREATE TABLE IF NOT EXISTS `user_sessions` (
+                `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                `user_id` VARCHAR(64) NOT NULL,
+                `token_hash` CHAR(64) NOT NULL UNIQUE,
+                `ip_address` VARCHAR(64) DEFAULT NULL,
+                `user_agent` VARCHAR(255) DEFAULT NULL,
+                `expires_at` DATETIME NOT NULL,
+                `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX `idx_sessions_user` (`user_id`),
+                INDEX `idx_sessions_expires` (`expires_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        );
+        getTableColumns($pdo, 'user_sessions', true);
+    } catch (Throwable) {
+        // Ignora caso o usuário do banco não possua privilégio CREATE TABLE
     }
 }
 
@@ -211,6 +256,72 @@ function updateFilteredRow(PDO $pdo, string $table, string $id, array $data): in
     return $stmt->rowCount();
 }
 
+function isHttpsRequest(): bool
+{
+    if (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off') {
+        return true;
+    }
+    if (strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https') {
+        return true;
+    }
+    if (strtolower((string) ($_SERVER['REQUEST_SCHEME'] ?? '')) === 'https') {
+        return true;
+    }
+    if (str_contains(strtolower((string) ($_SERVER['HTTP_CF_VISITOR'] ?? '')), '"https"')) {
+        return true;
+    }
+    return ((int) ($_SERVER['SERVER_PORT'] ?? 80)) === 443;
+}
+
+function setSessionCookie(string $rawToken, int $ttlSeconds): void
+{
+    $cookie = 'fortmidia_session=' . rawurlencode($rawToken)
+        . '; Path=/; Max-Age=' . max(60, $ttlSeconds)
+        . '; HttpOnly';
+    if (isHttpsRequest()) {
+        $cookie .= '; Secure; SameSite=None; Partitioned';
+    } else {
+        $cookie .= '; SameSite=Lax';
+    }
+    header('Set-Cookie: ' . $cookie, false);
+}
+
+function clearSessionCookie(): void
+{
+    $cookie = 'fortmidia_session=; Path=/; Max-Age=0; HttpOnly';
+    if (isHttpsRequest()) {
+        $cookie .= '; Secure; SameSite=None; Partitioned';
+    } else {
+        $cookie .= '; SameSite=Lax';
+    }
+    header('Set-Cookie: ' . $cookie, false);
+}
+
+function normalizeSimpleLogin(string $raw): string
+{
+    $s = trim($raw);
+    if ($s === '') {
+        return '';
+    }
+    $s = mb_strtolower($s, 'UTF-8');
+    $map = [
+        'á' => 'a', 'à' => 'a', 'â' => 'a', 'ã' => 'a', 'ä' => 'a',
+        'é' => 'e', 'è' => 'e', 'ê' => 'e', 'ë' => 'e',
+        'í' => 'i', 'ì' => 'i', 'î' => 'i', 'ï' => 'i',
+        'ó' => 'o', 'ò' => 'o', 'ô' => 'o', 'õ' => 'o', 'ö' => 'o',
+        'ú' => 'u', 'ù' => 'u', 'û' => 'u', 'ü' => 'u',
+        'ç' => 'c', 'ñ' => 'n',
+    ];
+    return strtr($s, $map);
+}
+
+function slugifyLoginName(string $raw): string
+{
+    $norm = normalizeSimpleLogin($raw);
+    $slug = preg_replace('/[^a-z0-9._-]+/', '', $norm) ?? '';
+    return trim($slug, '._-');
+}
+
 function extractBearerToken(): ?string
 {
     $header = $_SERVER['HTTP_AUTHORIZATION']
@@ -231,24 +342,73 @@ function extractBearerToken(): ?string
     return null;
 }
 
-function getAuthenticatedUser(PDO $pdo): ?array
+function extractSessionToken(?bool &$fromCookie = null): ?string
 {
-    $token = extractBearerToken();
+    $bearer = extractBearerToken();
+    if ($bearer !== null) {
+        $fromCookie = false;
+        return $bearer;
+    }
+
+    $cookieToken = trim((string) ($_COOKIE['fortmidia_session'] ?? ''));
+    if ($cookieToken !== '' && preg_match('/^[A-Za-z0-9._\-]{20,256}$/', $cookieToken)) {
+        $fromCookie = true;
+        return $cookieToken;
+    }
+
+    $fromCookie = false;
+    return null;
+}
+
+function verifyCookieCsrf(array $allowedOrigins): void
+{
+    $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    if (in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) {
+        return;
+    }
+
+    $requestedWith = strtolower(trim((string) ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '')));
+    if ($requestedWith === 'xmlhttprequest') {
+        return;
+    }
+
+    $origin = trim((string) ($_SERVER['HTTP_ORIGIN'] ?? ''));
+    $host = strtolower(trim((string) ($_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? '')));
+    if ($origin !== '') {
+        $originHost = strtolower((string) parse_url($origin, PHP_URL_HOST));
+        if (in_array($origin, $allowedOrigins, true) || ($host !== '' && $originHost === explode(':', $host)[0])) {
+            return;
+        }
+    }
+
+    jsonResponse(403, ['error' => 'Origem não autorizada para esta operação autenticada.']);
+}
+
+function getAuthenticatedUser(PDO $pdo, array $allowedOrigins = []): ?array
+{
+    $fromCookie = false;
+    $token = extractSessionToken($fromCookie);
     if ($token === null) {
         return null;
     }
 
+    if ($fromCookie) {
+        verifyCookieCsrf($allowedOrigins);
+    }
+
     $tokenHash = hash('sha256', $token);
+    $cols = getTableColumns($pdo, 'users');
+    $loginCol = isset($cols['login_name']) ? 'u.login_name,' : '';
     $stmt = $pdo->prepare(
-        'SELECT u.id, u.name, u.role, u.hierarchy_level, u.department, u.email, u.phone,
+        "SELECT u.id, u.name, {$loginCol} u.role, u.hierarchy_level, u.department, u.email, u.phone,
                 u.avatar_url, u.bio, u.linked_client_name, u.allowed_modules_json,
                 u.permissions_json, u.active
            FROM user_sessions s
            INNER JOIN users u ON u.id = s.user_id
           WHERE s.token_hash = :token_hash
-            AND s.expires_at > NOW()
+            AND s.expires_at > UTC_TIMESTAMP()
             AND u.active = 1
-          LIMIT 1'
+          LIMIT 1"
     );
     $stmt->execute([':token_hash' => $tokenHash]);
     $user = $stmt->fetch();
@@ -261,7 +421,8 @@ function getAuthenticatedUser(PDO $pdo): ?array
 
 function requireAuth(PDO $pdo): array
 {
-    $user = getAuthenticatedUser($pdo);
+    global $allowedOrigins;
+    $user = getAuthenticatedUser($pdo, $allowedOrigins);
     if ($user === null) {
         jsonResponse(401, ['error' => 'Autenticação obrigatória. Faça login novamente.']);
     }
@@ -273,6 +434,15 @@ function requireAdmin(PDO $pdo): array
     $user = requireAuth($pdo);
     if ((int) ($user['hierarchyLevel'] ?? 99) > 2) {
         jsonResponse(403, ['error' => 'Permissão insuficiente para esta operação administrativa.']);
+    }
+    return $user;
+}
+
+function requireSuperAdmin(PDO $pdo): array
+{
+    $user = requireAuth($pdo);
+    if ((int) ($user['hierarchyLevel'] ?? 99) !== 1) {
+        jsonResponse(403, ['error' => 'Apenas o Super Admin pode criar usuários ou definir/alterar senhas de acesso.']);
     }
     return $user;
 }
@@ -294,13 +464,19 @@ function decodeJsonField(mixed $raw, mixed $fallback): mixed
 
 function formatUserRow(array $row): array
 {
+    $email = (string) ($row['email'] ?? '');
+    $derivedLogin = !empty($row['login_name'])
+        ? (string) $row['login_name']
+        : (str_contains($email, '@') ? explode('@', $email)[0] : slugifyLoginName((string) ($row['name'] ?? '')));
+
     return [
         'id' => (string) $row['id'],
         'name' => (string) $row['name'],
+        'loginName' => $derivedLogin,
         'role' => (string) $row['role'],
         'hierarchyLevel' => (int) $row['hierarchy_level'],
         'department' => (string) $row['department'],
-        'email' => (string) $row['email'],
+        'email' => $email,
         'phone' => (string) ($row['phone'] ?? ''),
         'avatarUrl' => (string) ($row['avatar_url'] ?? ''),
         'bio' => (string) ($row['bio'] ?? ''),
@@ -988,74 +1164,109 @@ if ($resource === 'auth') {
 
     if ($subResource === 'login' && $method === 'POST') {
         $body = readJsonBody();
-        $username = strtolower(trim((string) ($body['username'] ?? '')));
+        $rawUsername = trim((string) ($body['username'] ?? ''));
+        $username = normalizeSimpleLogin($rawUsername);
         $password = (string) ($body['password'] ?? '');
 
         if ($username === '' || $password === '') {
             jsonResponse(400, ['error' => 'Informe usuário e senha para continuar.']);
         }
 
-        $stmt = $pdo->prepare(
-            'SELECT * FROM users
-              WHERE LOWER(email) = :exact
-                 OR LOWER(SUBSTRING_INDEX(email, "@", 1)) = :prefix
-                 OR LOWER(name) = :name_exact
-                 OR LOWER(SUBSTRING_INDEX(name, " ", 1)) = :first_name
-                 OR (:is_admin_alias = 1 AND hierarchy_level = 1)
-              ORDER BY hierarchy_level ASC
-              LIMIT 1'
-        );
-        $stmt->execute([
-            ':exact' => $username,
-            ':prefix' => $username,
-            ':name_exact' => $username,
-            ':first_name' => $username,
-            ':is_admin_alias' => in_array($username, ['admin', 'diretoria'], true) ? 1 : 0,
-        ]);
-        $row = $stmt->fetch();
+        // Busca todos os usuários e compara com normalização (nome simples, primeiro nome, login_name, e-mail ou prefixo)
+        $allUsers = $pdo->query('SELECT * FROM users ORDER BY hierarchy_level ASC, id ASC')->fetchAll();
+        $candidates = [];
+        foreach ($allUsers as $u) {
+            $uEmail = normalizeSimpleLogin((string) ($u['email'] ?? ''));
+            $uPrefix = str_contains($uEmail, '@') ? explode('@', $uEmail)[0] : $uEmail;
+            $uLogin = normalizeSimpleLogin((string) ($u['login_name'] ?? ''));
+            $uName = normalizeSimpleLogin((string) ($u['name'] ?? ''));
+            $uFirst = explode(' ', $uName)[0] ?? '';
+            $isSuper = ((int) ($u['hierarchy_level'] ?? 99)) === 1;
 
-        if (!$row || !password_verify($password, (string) $row['password_hash'])) {
+            if (
+                ($uLogin !== '' && $username === $uLogin) ||
+                ($uEmail !== '' && $username === $uEmail) ||
+                ($uPrefix !== '' && $username === $uPrefix) ||
+                ($uName !== '' && $username === $uName) ||
+                ($uFirst !== '' && $username === $uFirst) ||
+                ($isSuper && in_array($username, ['admin', 'diretoria'], true))
+            ) {
+                $candidates[] = $u;
+            }
+        }
+
+        $matchedRow = null;
+        foreach ($candidates as $cand) {
+            if (password_verify($password, (string) ($cand['password_hash'] ?? ''))) {
+                $matchedRow = $cand;
+                break;
+            }
+        }
+
+        if (!$matchedRow) {
             jsonResponse(401, ['error' => 'Usuário ou senha inválidos.']);
         }
-        if (!(bool) $row['active']) {
+        if (!(bool) $matchedRow['active']) {
             jsonResponse(403, ['error' => 'Este usuário encontra-se inativo.']);
         }
 
+        ensureUserSessionsTable($pdo);
         $rawToken = bin2hex(random_bytes(32));
         $tokenHash = hash('sha256', $rawToken);
-        $ttlHours = max(1, (int) ($config['session_ttl_hours'] ?? 24));
-        $expiresAt = gmdate('Y-m-d H:i:s', time() + ($ttlHours * 3600));
+        $ttlHours = max(24, (int) ($config['session_ttl_hours'] ?? 720));
+        $ttlSeconds = $ttlHours * 3600;
+        $expiresAt = gmdate('Y-m-d H:i:s', time() + $ttlSeconds);
 
         $ins = $pdo->prepare(
             'INSERT INTO user_sessions (user_id, token_hash, ip_address, user_agent, expires_at)
              VALUES (:user_id, :token_hash, :ip, :ua, :expires_at)'
         );
         $ins->execute([
-            ':user_id' => $row['id'],
+            ':user_id' => $matchedRow['id'],
             ':token_hash' => $tokenHash,
             ':ip' => substr((string) ($_SERVER['REMOTE_ADDR'] ?? ''), 0, 64),
             ':ua' => substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255),
             ':expires_at' => $expiresAt,
         ]);
 
+        setSessionCookie($rawToken, $ttlSeconds);
+
         jsonResponse(200, [
             'token' => $rawToken,
             'expiresAt' => $expiresAt,
-            'user' => formatUserRow($row),
+            'user' => formatUserRow($matchedRow),
         ]);
     }
 
     if ($subResource === 'me' && $method === 'GET') {
         $user = requireAuth($pdo);
-        jsonResponse(200, ['user' => $user]);
+        // Renova janela deslizante da sessão (30 dias) para manter permanência no refresh (desktop e mobile)
+        $currentToken = extractSessionToken();
+        if ($currentToken !== null) {
+            $ttlHours = max(24, (int) ($config['session_ttl_hours'] ?? 720));
+            $ttlSeconds = $ttlHours * 3600;
+            $newExpiresAt = gmdate('Y-m-d H:i:s', time() + $ttlSeconds);
+            try {
+                $upd = $pdo->prepare('UPDATE user_sessions SET expires_at = :exp WHERE token_hash = :th');
+                $upd->execute([
+                    ':exp' => $newExpiresAt,
+                    ':th' => hash('sha256', $currentToken),
+                ]);
+                setSessionCookie($currentToken, $ttlSeconds);
+            } catch (Throwable) {
+                // Não interrompe retorno de /auth/me caso a renovação falhe
+            }
+        }
+        jsonResponse(200, ['user' => $user, 'sessionActive' => true]);
     }
 
     if ($subResource === 'logout' && $method === 'POST') {
-        $token = extractBearerToken();
+        $token = extractSessionToken();
         if ($token !== null) {
             $stmt = $pdo->prepare('DELETE FROM user_sessions WHERE token_hash = :token_hash');
             $stmt->execute([':token_hash' => hash('sha256', $token)]);
         }
+        clearSessionCookie();
         jsonResponse(200, ['ok' => true]);
     }
 
@@ -1174,16 +1385,27 @@ if ($resource === 'sync' && $subResource === 'seed' && $method === 'POST') {
         }
 
         // Usuários iniciais: INSERT IGNORE garante que o Super Admin real já cadastrado nunca seja sobrescrito
+        ensureUsersLoginNameColumn($pdo);
         foreach ((array) ($body['users'] ?? []) as $row) {
             if (!is_array($row)) continue;
             $email = strtolower(trim((string) ($row['email'] ?? '')));
+            $rawLogin = trim((string) ($row['loginName'] ?? ''));
             $rawPass = (string) ($row['password'] ?? '');
+            $loginSlug = $rawLogin !== ''
+                ? slugifyLoginName($rawLogin)
+                : ($email !== '' && str_contains($email, '@')
+                    ? slugifyLoginName(explode('@', $email)[0])
+                    : slugifyLoginName(explode(' ', (string) ($row['name'] ?? ''))[0]));
+            if ($email === '' && $loginSlug !== '') {
+                $email = $loginSlug . '@fortmidia.local';
+            }
             if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($rawPass) < 6) {
                 continue;
             }
             $userDbRow = [
                 'id' => trim((string) ($row['id'] ?? ('usr-' . bin2hex(random_bytes(4))))),
                 'name' => trim((string) ($row['name'] ?? 'Membro FortMídia')),
+                'login_name' => $loginSlug !== '' ? $loginSlug : null,
                 'role' => trim((string) ($row['role'] ?? 'Executivo Comercial')),
                 'hierarchy_level' => (int) ($row['hierarchyLevel'] ?? 4),
                 'department' => trim((string) ($row['department'] ?? 'Operações FortMídia')),
@@ -1550,64 +1772,82 @@ if ($resource === 'outdoors') {
 }
 
 // ----------------------------------------------------------------------------
-// 16. Usuários (/api/usuarios) — Protegido para Super Admin / Admin
+// 16. Usuários (/api/usuarios) — Gestão protegida (senhas exclusivas Super Admin)
 // ----------------------------------------------------------------------------
 if ($resource === 'usuarios') {
     $pdo = getPdo($config);
     $currentAdmin = requireAdmin($pdo);
+    $userCols = ensureUsersLoginNameColumn($pdo);
+    $selectUserCols = 'id, name, ' . (isset($userCols['login_name']) ? 'login_name, ' : '') .
+        'role, hierarchy_level, department, email, phone, avatar_url, bio, linked_client_name, allowed_modules_json, permissions_json, active';
 
     if ($method === 'GET') {
         $rows = $pdo->query(
-            'SELECT id, name, role, hierarchy_level, department, email, phone, avatar_url, bio,
-                    linked_client_name, allowed_modules_json, permissions_json, active
-               FROM users ORDER BY hierarchy_level ASC, name ASC'
+            "SELECT {$selectUserCols} FROM users ORDER BY hierarchy_level ASC, name ASC"
         )->fetchAll();
         jsonResponse(200, ['items' => array_map('formatUserRow', $rows)]);
     }
 
     if ($method === 'POST') {
+        // Apenas Super Admin pode cadastrar usuários e criar senhas de acesso
+        requireSuperAdmin($pdo);
+
         $b = readJsonBody();
+        $name = trim((string) ($b['name'] ?? ''));
+        $rawLogin = trim((string) ($b['loginName'] ?? ''));
         $email = strtolower(trim((string) ($b['email'] ?? '')));
         $password = (string) ($b['password'] ?? '');
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($password) < 6) {
-            jsonResponse(400, ['error' => 'E-mail inválido ou senha muito curta (mínimo 6 caracteres).']);
+
+        if ($name === '') {
+            jsonResponse(400, ['error' => 'Informe o nome do usuário.']);
         }
+
+        $loginSlug = $rawLogin !== ''
+            ? slugifyLoginName($rawLogin)
+            : ($email !== '' && str_contains($email, '@')
+                ? slugifyLoginName(explode('@', $email)[0])
+                : slugifyLoginName(explode(' ', $name)[0]));
+
+        if ($email === '' && $loginSlug !== '') {
+            $email = $loginSlug . '@fortmidia.local';
+        }
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            jsonResponse(400, ['error' => 'Informe um nome de login simples ou e-mail válido.']);
+        }
+        if (strlen($password) < 6) {
+            jsonResponse(400, ['error' => 'A senha de acesso deve ter pelo menos 6 caracteres.']);
+        }
+
         $id = trim((string) ($b['id'] ?? ('usr-' . time())));
+        $userDbRow = [
+            'id' => $id,
+            'name' => $name,
+            'login_name' => $loginSlug !== '' ? $loginSlug : null,
+            'role' => trim((string) ($b['role'] ?? 'Executivo Comercial')),
+            'hierarchy_level' => (int) ($b['hierarchyLevel'] ?? 4),
+            'department' => trim((string) ($b['department'] ?? 'Operações FortMídia')),
+            'email' => $email,
+            'phone' => trim((string) ($b['phone'] ?? '')),
+            'password_hash' => password_hash($password, PASSWORD_BCRYPT),
+            'avatar_url' => (string) ($b['avatarUrl'] ?? ''),
+            'bio' => (string) ($b['bio'] ?? ''),
+            'linked_client_name' => !empty($b['linkedClientName']) ? (string) $b['linkedClientName'] : null,
+            'allowed_modules_json' => json_encode($b['allowedModules'] ?? [], JSON_UNESCAPED_UNICODE),
+            'permissions_json' => json_encode($b['permissions'] ?? [], JSON_UNESCAPED_UNICODE),
+            'active' => !isset($b['active']) || $b['active'] ? 1 : 0,
+        ];
+
         try {
-            $stmt = $pdo->prepare(
-                'INSERT INTO users
-                 (id, name, role, hierarchy_level, department, email, phone, password_hash, avatar_url, bio, linked_client_name, allowed_modules_json, permissions_json, active)
-                 VALUES
-                 (:id, :name, :role, :level, :dept, :email, :phone, :hash, :avatar, :bio, :client, :mods, :perms, :active)'
-            );
-            $stmt->execute([
-                ':id' => $id,
-                ':name' => trim((string) ($b['name'] ?? '')),
-                ':role' => trim((string) ($b['role'] ?? 'Executivo Comercial')),
-                ':level' => (int) ($b['hierarchyLevel'] ?? 4),
-                ':dept' => trim((string) ($b['department'] ?? 'Operações FortMídia')),
-                ':email' => $email,
-                ':phone' => trim((string) ($b['phone'] ?? '')),
-                ':hash' => password_hash($password, PASSWORD_BCRYPT),
-                ':avatar' => (string) ($b['avatarUrl'] ?? ''),
-                ':bio' => (string) ($b['bio'] ?? ''),
-                ':client' => !empty($b['linkedClientName']) ? (string) $b['linkedClientName'] : null,
-                ':mods' => json_encode($b['allowedModules'] ?? [], JSON_UNESCAPED_UNICODE),
-                ':perms' => json_encode($b['permissions'] ?? [], JSON_UNESCAPED_UNICODE),
-                ':active' => !isset($b['active']) || $b['active'] ? 1 : 0,
-            ]);
+            insertFilteredRow($pdo, 'users', $userDbRow, false);
         } catch (PDOException $e) {
             if ((string) $e->getCode() === '23000') {
-                jsonResponse(409, ['error' => 'Já existe um usuário cadastrado com este e-mail ou ID.']);
+                jsonResponse(409, ['error' => 'Já existe um usuário cadastrado com este nome de login ou e-mail.']);
             }
             jsonResponse(500, ['error' => 'Erro ao cadastrar usuário no MySQL.']);
         }
 
-        $sel = $pdo->prepare(
-            'SELECT id, name, role, hierarchy_level, department, email, phone, avatar_url, bio,
-                    linked_client_name, allowed_modules_json, permissions_json, active
-               FROM users WHERE id = :id LIMIT 1'
-        );
+        $sel = $pdo->prepare("SELECT {$selectUserCols} FROM users WHERE id = :id LIMIT 1");
         $sel->execute([':id' => $id]);
         $saved = $sel->fetch();
         jsonResponse(201, ['ok' => true, 'id' => $id, 'item' => $saved ? formatUserRow($saved) : null]);
@@ -1615,62 +1855,150 @@ if ($resource === 'usuarios') {
 
     if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
         $b = readJsonBody();
-        $patch = [];
+        $actorIsSuperAdmin = ((int) ($currentAdmin['hierarchyLevel'] ?? 99)) === 1;
 
-        if (array_key_exists('name', $b)) $patch['name'] = trim((string) $b['name']);
-        if (array_key_exists('role', $b)) $patch['role'] = trim((string) $b['role']);
-        if (array_key_exists('hierarchyLevel', $b)) $patch['hierarchy_level'] = (int) $b['hierarchyLevel'];
-        if (array_key_exists('department', $b)) $patch['department'] = trim((string) $b['department']);
-        if (array_key_exists('email', $b)) {
-            $email = strtolower(trim((string) $b['email']));
-            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                jsonResponse(400, ['error' => 'E-mail informado é inválido.']);
+        $checkStmt = $pdo->prepare('SELECT id, hierarchy_level, email FROM users WHERE id = :id LIMIT 1');
+        $checkStmt->execute([':id' => $itemId]);
+        $existingUser = $checkStmt->fetch();
+
+        // Se o registro ainda não existir fisicamente na tabela `users`, força gravação via INSERT (somente Super Admin)
+        if (!$existingUser) {
+            if (!$actorIsSuperAdmin) {
+                jsonResponse(403, ['error' => 'Apenas o Super Admin pode gravar novas credenciais na tabela users.']);
             }
-            $patch['email'] = $email;
+            $name = trim((string) ($b['name'] ?? ''));
+            $rawLogin = trim((string) ($b['loginName'] ?? ''));
+            $email = strtolower(trim((string) ($b['email'] ?? '')));
+            $password = trim((string) ($b['password'] ?? ''));
+
+            if ($name === '') {
+                jsonResponse(400, ['error' => 'Informe o nome do usuário para gravar na tabela users.']);
+            }
+            if (strlen($password) < 6) {
+                jsonResponse(400, [
+                    'error' => 'Este usuário ainda não está gravado na tabela users do MySQL. Defina uma senha (mín. 6 caracteres) para salvar as credenciais.',
+                ]);
+            }
+
+            $loginSlug = $rawLogin !== ''
+                ? slugifyLoginName($rawLogin)
+                : ($email !== '' && str_contains($email, '@')
+                    ? slugifyLoginName(explode('@', $email)[0])
+                    : slugifyLoginName(explode(' ', $name)[0]));
+            if ($email === '' && $loginSlug !== '') {
+                $email = $loginSlug . '@fortmidia.local';
+            }
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                jsonResponse(400, ['error' => 'Informe um nome de login simples ou e-mail válido.']);
+            }
+
+            $userDbRow = [
+                'id' => $itemId,
+                'name' => $name,
+                'login_name' => $loginSlug !== '' ? $loginSlug : null,
+                'role' => trim((string) ($b['role'] ?? 'Executivo Comercial')),
+                'hierarchy_level' => (int) ($b['hierarchyLevel'] ?? 4),
+                'department' => trim((string) ($b['department'] ?? 'Operações FortMídia')),
+                'email' => $email,
+                'phone' => trim((string) ($b['phone'] ?? '')),
+                'password_hash' => password_hash($password, PASSWORD_BCRYPT),
+                'avatar_url' => (string) ($b['avatarUrl'] ?? ''),
+                'bio' => (string) ($b['bio'] ?? ''),
+                'linked_client_name' => !empty($b['linkedClientName']) ? (string) $b['linkedClientName'] : null,
+                'allowed_modules_json' => json_encode($b['allowedModules'] ?? [], JSON_UNESCAPED_UNICODE),
+                'permissions_json' => json_encode($b['permissions'] ?? [], JSON_UNESCAPED_UNICODE),
+                'active' => !isset($b['active']) || $b['active'] ? 1 : 0,
+            ];
+
+            try {
+                insertFilteredRow($pdo, 'users', $userDbRow, false);
+            } catch (PDOException $e) {
+                if ((string) $e->getCode() === '23000') {
+                    jsonResponse(409, ['error' => 'Já existe um usuário com este nome de login ou e-mail na tabela users.']);
+                }
+                jsonResponse(500, ['error' => 'Erro ao gravar credenciais na tabela users do MySQL.']);
+            }
+
+            $sel = $pdo->prepare("SELECT {$selectUserCols} FROM users WHERE id = :id LIMIT 1");
+            $sel->execute([':id' => $itemId]);
+            $saved = $sel->fetch();
+            jsonResponse(200, ['ok' => true, 'created' => true, 'item' => $saved ? formatUserRow($saved) : null]);
         }
+
+        // Protege conta Super Admin e impede alteração de senha/hierarquia/permissões por não-Super-Admin
+        if (!$actorIsSuperAdmin && ((int) ($existingUser['hierarchy_level'] ?? 99)) === 1) {
+            jsonResponse(403, ['error' => 'Apenas o Super Admin pode alterar contas de Super Admin.']);
+        }
+
+        if (array_key_exists('password', $b) && trim((string) $b['password']) !== '' && !$actorIsSuperAdmin) {
+            jsonResponse(403, ['error' => 'Apenas o Super Admin pode definir ou alterar senhas de acesso.']);
+        }
+
+        $patch = [];
+        if (array_key_exists('name', $b)) $patch['name'] = trim((string) $b['name']);
+        if (array_key_exists('department', $b)) $patch['department'] = trim((string) $b['department']);
         if (array_key_exists('phone', $b)) $patch['phone'] = trim((string) $b['phone']);
         if (array_key_exists('avatarUrl', $b)) $patch['avatar_url'] = (string) $b['avatarUrl'];
         if (array_key_exists('bio', $b)) $patch['bio'] = (string) $b['bio'];
         if (array_key_exists('linkedClientName', $b)) {
             $patch['linked_client_name'] = !empty($b['linkedClientName']) ? (string) $b['linkedClientName'] : null;
         }
-        if (array_key_exists('allowedModules', $b)) {
-            $patch['allowed_modules_json'] = json_encode($b['allowedModules'] ?? [], JSON_UNESCAPED_UNICODE);
-        }
-        if (array_key_exists('permissions', $b)) {
-            $patch['permissions_json'] = json_encode($b['permissions'] ?? [], JSON_UNESCAPED_UNICODE);
-        }
-        if (array_key_exists('active', $b)) {
-            $patch['active'] = $b['active'] ? 1 : 0;
-        }
-        if (array_key_exists('password', $b) && trim((string) $b['password']) !== '') {
-            $newPassword = (string) $b['password'];
-            if (strlen($newPassword) < 6) {
-                jsonResponse(400, ['error' => 'A nova senha deve ter pelo menos 6 caracteres.']);
+
+        // Campos de credenciais e hierarquia exclusivos do Super Admin
+        if ($actorIsSuperAdmin) {
+            if (array_key_exists('loginName', $b)) {
+                $slug = slugifyLoginName((string) $b['loginName']);
+                $patch['login_name'] = $slug !== '' ? $slug : null;
             }
-            $patch['password_hash'] = password_hash($newPassword, PASSWORD_BCRYPT);
+            if (array_key_exists('role', $b)) $patch['role'] = trim((string) $b['role']);
+            if (array_key_exists('hierarchyLevel', $b)) $patch['hierarchy_level'] = (int) $b['hierarchyLevel'];
+            if (array_key_exists('email', $b)) {
+                $email = strtolower(trim((string) $b['email']));
+                if ($email === '' && !empty($patch['login_name'])) {
+                    $email = $patch['login_name'] . '@fortmidia.local';
+                }
+                if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    jsonResponse(400, ['error' => 'E-mail informado é inválido.']);
+                }
+                if ($email !== '') {
+                    $patch['email'] = $email;
+                }
+            }
+            if (array_key_exists('allowedModules', $b)) {
+                $patch['allowed_modules_json'] = json_encode($b['allowedModules'] ?? [], JSON_UNESCAPED_UNICODE);
+            }
+            if (array_key_exists('permissions', $b)) {
+                $patch['permissions_json'] = json_encode($b['permissions'] ?? [], JSON_UNESCAPED_UNICODE);
+            }
+            if (array_key_exists('active', $b)) {
+                $patch['active'] = $b['active'] ? 1 : 0;
+            }
+            if (array_key_exists('password', $b) && trim((string) $b['password']) !== '') {
+                $newPassword = (string) $b['password'];
+                if (strlen($newPassword) < 6) {
+                    jsonResponse(400, ['error' => 'A nova senha deve ter pelo menos 6 caracteres.']);
+                }
+                $patch['password_hash'] = password_hash($newPassword, PASSWORD_BCRYPT);
+            }
         }
 
         try {
             updateFilteredRow($pdo, 'users', $itemId, $patch);
         } catch (PDOException $e) {
             if ((string) $e->getCode() === '23000') {
-                jsonResponse(409, ['error' => 'Este e-mail já está em uso por outro usuário.']);
+                jsonResponse(409, ['error' => 'Este nome de login ou e-mail já está em uso por outro usuário.']);
             }
             jsonResponse(500, ['error' => 'Erro ao atualizar usuário no MySQL.']);
         }
 
-        $sel = $pdo->prepare(
-            'SELECT id, name, role, hierarchy_level, department, email, phone, avatar_url, bio,
-                    linked_client_name, allowed_modules_json, permissions_json, active
-               FROM users WHERE id = :id LIMIT 1'
-        );
+        $sel = $pdo->prepare("SELECT {$selectUserCols} FROM users WHERE id = :id LIMIT 1");
         $sel->execute([':id' => $itemId]);
         $saved = $sel->fetch();
         jsonResponse(200, ['ok' => true, 'item' => $saved ? formatUserRow($saved) : null]);
     }
 
     if ($method === 'DELETE' && $itemId) {
+        requireSuperAdmin($pdo);
         if ($itemId === $currentAdmin['id']) {
             jsonResponse(400, ['error' => 'Não é permitido excluir o próprio usuário atualmente conectado.']);
         }

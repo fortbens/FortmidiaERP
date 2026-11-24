@@ -480,6 +480,8 @@ export interface UserPermissions {
 export interface TeamMember {
   id: string;
   name: string;
+  /** Nome simples de login (ex: emerson, maria, carlos) para acesso simplificado sem precisar digitar e-mail completo */
+  loginName?: string;
   role: TeamRole;
   hierarchyLevel: 1 | 2 | 3 | 4 | 5 | 6;
   department: string;

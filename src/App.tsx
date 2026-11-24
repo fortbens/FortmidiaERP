@@ -52,7 +52,7 @@ function detectInitialRoute(): AppRouteView {
 
   // Rotas administrativas protegidas por login (/admin, /crm, /sistema, /dashboard, /painel)
   if (
-    /(?:^|\/|#\/)(admin|crm|sistema|dashboard|painel)(?:\/|$|\s)/.test(combined)
+    /(?:^|\/|#\/)(admin|crm|sistema|dashboard|painel)(?:\/|\?|$|\s)/.test(combined)
   ) {
     return 'admin';
   }
@@ -106,7 +106,15 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
-    const onHashOrPop = () => {
+    const onHashOrPop = (event: Event) => {
+      const state =
+        'state' in event
+          ? ((event as PopStateEvent).state as { fortAdminGuard?: boolean } | null | undefined)
+          : undefined;
+      if (state?.fortAdminGuard) {
+        setView('admin');
+        return;
+      }
       setView(detectInitialRoute());
     };
     const onQuotaExceeded = () => {

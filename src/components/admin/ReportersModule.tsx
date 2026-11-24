@@ -72,8 +72,8 @@ export const ReportersModule: React.FC = () => {
   const [repBeat, setRepBeat] = useState('Cidades, Mobilidade & Fala Cidadão');
   const [repNotes, setRepNotes] = useState('');
   const [repActive, setRepActive] = useState(true);
-  const [createLoginAccess, setCreateLoginAccess] = useState(true);
-  const [repPassword, setRepPassword] = useState('fortnews2026');
+  const [createLoginAccess, setCreateLoginAccess] = useState(false);
+  const [repPassword, setRepPassword] = useState('');
 
   // Quick New Pauta Distribution Form
   const [showQuickPauta, setShowQuickPauta] = useState(false);
@@ -154,8 +154,8 @@ export const ReportersModule: React.FC = () => {
     setRepBeat('Cidades, Mobilidade & Fala Cidadão');
     setRepNotes('');
     setRepActive(true);
-    setCreateLoginAccess(true);
-    setRepPassword('fortnews2026');
+    setCreateLoginAccess(false);
+    setRepPassword('');
   };
 
   const openEditReporter = (rep: ReporterProfile) => {
@@ -188,6 +188,7 @@ export const ReportersModule: React.FC = () => {
       });
       setFeedback(`Cadastro do repórter ${repName.trim()} atualizado com sucesso.`);
     } else {
+      const canCreateCreds = Boolean(isSuperAdmin && createLoginAccess && repEmail.trim() && repPassword.trim().length >= 6);
       addReporter(
         {
           name: repName.trim(),
@@ -198,11 +199,11 @@ export const ReportersModule: React.FC = () => {
           notes: repNotes.trim() || undefined,
           active: repActive,
         },
-        createLoginAccess && repEmail.trim() ? repPassword : undefined
+        canCreateCreds ? repPassword.trim() : undefined
       );
       setFeedback(
-        createLoginAccess && repEmail.trim()
-          ? `Repórter ${repName.trim()} cadastrado e acesso criado no painel (perfil Repórter / Jornalista).`
+        canCreateCreds
+          ? `Repórter ${repName.trim()} cadastrado e credenciais gravadas no sistema (perfil Repórter / Jornalista).`
           : `Repórter ${repName.trim()} cadastrado para distribuição de matérias.`
       );
     }
@@ -590,7 +591,7 @@ export const ReportersModule: React.FC = () => {
                 Repórter ativo para receber pautas
               </label>
 
-              {!editingReporterId && (
+              {!editingReporterId && isSuperAdmin && (
                 <label className="inline-flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -598,18 +599,25 @@ export const ReportersModule: React.FC = () => {
                     onChange={(e) => setCreateLoginAccess(e.target.checked)}
                     className="accent-[#fa6607]"
                   />
-                  Criar login no sistema (acesso à Redação e às próprias Fontes)
+                  Criar login no sistema (exclusivo Super Admin)
                 </label>
               )}
 
-              {!editingReporterId && createLoginAccess && (
+              {!editingReporterId && isSuperAdmin && createLoginAccess && (
                 <input
-                  type="text"
+                  type="password"
+                  minLength={6}
                   value={repPassword}
                   onChange={(e) => setRepPassword(e.target.value)}
-                  placeholder="Senha inicial"
-                  className="w-36 rounded-lg border border-white/15 bg-[#0A0A0A] px-2.5 py-1.5 text-xs font-mono text-white focus:border-[#fa6607] focus:outline-none"
+                  placeholder="Definir senha (mín. 6)"
+                  className="w-44 rounded-lg border border-white/15 bg-[#0A0A0A] px-2.5 py-1.5 text-xs font-mono text-white focus:border-[#fa6607] focus:outline-none"
                 />
+              )}
+
+              {!editingReporterId && !isSuperAdmin && (
+                <span className="text-[11px] text-zinc-500">
+                  Apenas o Super Admin cria senhas de acesso em Equipe &amp; Permissões.
+                </span>
               )}
             </div>
 

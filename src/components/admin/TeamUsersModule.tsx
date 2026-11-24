@@ -1,7 +1,12 @@
 import React, { useState } from 'react';
 import {
+  AlertTriangle,
+  AtSign,
   Check,
+  Database,
   Edit3,
+  Eye,
+  EyeOff,
   KeyRound,
   Lock,
   Mail,
@@ -60,6 +65,26 @@ const MODULE_LABELS: Record<AdminTabId, string> = {
   cms: 'CMS Portais & Deploy',
 };
 
+function slugifySimpleLogin(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9._-]+/g, '')
+    .replace(/^[._-]+|[._-]+$/g, '');
+}
+
+function deriveSimpleLogin(member: Pick<TeamMember, 'loginName' | 'email' | 'name'>): string {
+  if (member.loginName && member.loginName.trim()) {
+    return slugifySimpleLogin(member.loginName);
+  }
+  if (member.email && member.email.includes('@')) {
+    return slugifySimpleLogin(member.email.split('@')[0]);
+  }
+  return slugifySimpleLogin(member.name.split(/\s+/)[0] || '');
+}
+
 export const TeamUsersModule: React.FC = () => {
   const {
     teamMembers,
@@ -68,21 +93,30 @@ export const TeamUsersModule: React.FC = () => {
     addTeamMember,
     updateTeamMember,
     deleteTeamMember,
+    apiMode,
   } = useFortMidia();
 
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [editingProfileDraft, setEditingProfileDraft] = useState<TeamMember | null>(null);
+  const [editNewPassword, setEditNewPassword] = useState('');
+  const [showEditPassword, setShowEditPassword] = useState(false);
   const [applyRolePresetOnSave, setApplyRolePresetOnSave] = useState(false);
   const [roleFilter, setRoleFilter] = useState<'Todos' | TeamRole>('Todos');
   const [notice, setNotice] = useState<string | null>(null);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [savingUser, setSavingUser] = useState(false);
 
+  // Create form state (Super Admin only)
   const [name, setName] = useState('');
+  const [loginName, setLoginName] = useState('');
+  const [loginTouched, setLoginTouched] = useState(false);
   const [role, setRole] = useState<TeamRole>('Executivo Comercial');
   const [department, setDepartment] = useState('Comercial & Mídia 360°');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('fortmidia2026');
+  const [password, setPassword] = useState('');
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
   const [bio, setBio] = useState('');
   const [linkedClientName, setLinkedClientName] = useState('');
   const [avatarUrl, setAvatarUrl] = useState(
@@ -94,11 +128,12 @@ export const TeamUsersModule: React.FC = () => {
 
   const isSuperAdmin =
     activeUser?.role === 'Super Admin / Diretoria' || activeUser?.hierarchyLevel === 1;
-  const canManageUsers = Boolean(isSuperAdmin || activeUser?.permissions?.canEdit);
+  const canEditBasicProfiles = Boolean(isSuperAdmin || activeUser?.permissions?.canEdit);
 
   const showTempNotice = (msg: string) => {
+    setErrorBanner(null);
     setNotice(msg);
-    window.setTimeout(() => setNotice(null), 3500);
+    window.setTimeout(() => setNotice(null), 5000);
   };
 
   const handlePhotoUpload = (
@@ -111,113 +146,226 @@ export const TeamUsersModule: React.FC = () => {
     reader.onload = () => {
       if (typeof reader.result === 'string') {
         onResult(reader.result);
-        showTempNotice('Foto de perfil atualizada com sucesso.');
+        showTempNotice('Foto de perfil carregada. Salve para gravar no banco.');
       }
     };
     reader.readAsDataURL(file);
   };
 
-  const handleCreate = (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !email.trim()) return;
-    const preset = ROLE_PRESETS[role];
+    if (!isSuperAdmin || savingUser) return;
 
-    addTeamMember({
-      name: name.trim(),
-      role,
-      hierarchyLevel: preset.hierarchyLevel,
-      department: department.trim() || 'Operações FortMídia',
-      email: email.trim(),
-      phone: phone.trim() || '(11) 99999-0000',
-      password: password.trim() || 'fortmidia2026',
-      avatarUrl:
-        avatarUrl.trim() || '/assets/aistudio/Log_tipo_3D_Fortmidia_em_destaque_6b2bcf98.png',
-      bio: bio.trim() || preset.labelDesc,
-      active: true,
-      allowedModules: [...preset.allowedModules],
-      permissions: { ...preset.permissions },
-      linkedClientName:
-        role === 'Cliente / Anunciante'
-          ? linkedClientName.trim() || name.trim()
-          : undefined,
-    });
+    const cleanName = name.trim();
+    const cleanLogin = slugifySimpleLogin(loginName || cleanName.split(/\s+/)[0] || '');
+    const cleanEmail = email.trim().toLowerCase() || (cleanLogin ? `${cleanLogin}@fortmidia.local` : '');
+    const cleanPassword = password.trim();
 
-    setName('');
-    setEmail('');
-    setPhone('');
-    setBio('');
-    setLinkedClientName('');
-    setShowCreateForm(false);
-    showTempNotice('Novo perfil cadastrado com hierarquia e permissões aplicadas.');
+    if (!cleanName) {
+      setErrorBanner('Informe o nome completo do usuário ou empresa.');
+      return;
+    }
+    if (!cleanLogin && !cleanEmail) {
+      setErrorBanner('Informe um nome de login simples (ex.: joao) ou um e-mail.');
+      return;
+    }
+    if (cleanPassword.length < 6) {
+      setErrorBanner('A senha de acesso deve ter pelo menos 6 caracteres.');
+      return;
+    }
+
+    setSavingUser(true);
+    setErrorBanner(null);
+    try {
+      const preset = ROLE_PRESETS[role];
+      const result = await addTeamMember({
+        name: cleanName,
+        loginName: cleanLogin || undefined,
+        role,
+        hierarchyLevel: preset.hierarchyLevel,
+        department: department.trim() || 'Operações FortMídia',
+        email: cleanEmail,
+        phone: phone.trim() || '(11) 99999-0000',
+        password: cleanPassword,
+        avatarUrl:
+          avatarUrl.trim() || '/assets/aistudio/Log_tipo_3D_Fortmidia_em_destaque_6b2bcf98.png',
+        bio: bio.trim() || preset.labelDesc,
+        active: true,
+        allowedModules: [...preset.allowedModules],
+        permissions: { ...preset.permissions },
+        linkedClientName:
+          role === 'Cliente / Anunciante'
+            ? linkedClientName.trim() || cleanName
+            : undefined,
+      });
+
+      if (!result.ok) {
+        setErrorBanner(result.error || 'Erro ao salvar credenciais na tabela de usuários.');
+        return;
+      }
+
+      setName('');
+      setLoginName('');
+      setLoginTouched(false);
+      setEmail('');
+      setPhone('');
+      setPassword('');
+      setShowCreatePassword(false);
+      setBio('');
+      setLinkedClientName('');
+      setShowCreateForm(false);
+      showTempNotice(
+        result.savedInMysql
+          ? `Credenciais de "${cleanName}" (login: ${cleanLogin || cleanEmail}) gravadas na tabela users do MySQL.`
+          : `Usuário "${cleanName}" (login: ${cleanLogin || cleanEmail}) cadastrado com sucesso.`
+      );
+    } finally {
+      setSavingUser(false);
+    }
   };
 
-  const applyRoleChange = (member: TeamMember, nextRole: TeamRole) => {
+  const applyRoleChange = async (member: TeamMember, nextRole: TeamRole) => {
+    if (!isSuperAdmin) return;
     const preset = ROLE_PRESETS[nextRole];
-    updateTeamMember(member.id, {
+    const result = await updateTeamMember(member.id, {
       role: nextRole,
       hierarchyLevel: preset.hierarchyLevel,
       allowedModules: [...preset.allowedModules],
       permissions: { ...preset.permissions },
     });
+    if (!result.ok) {
+      setErrorBanner(result.error || 'Não foi possível atualizar a hierarquia no banco.');
+      return;
+    }
     showTempNotice(
       `Perfil de ${member.name} atualizado para "${nextRole}" (Nível ${preset.hierarchyLevel}).`
     );
   };
 
-  const toggleModulePermission = (member: TeamMember, tabId: AdminTabId) => {
+  const toggleModulePermission = async (member: TeamMember, tabId: AdminTabId) => {
+    if (!isSuperAdmin) return;
     const current = member.allowedModules || [];
     const next = current.includes(tabId)
       ? current.filter((t) => t !== tabId)
       : [...current, tabId];
-    updateTeamMember(member.id, { allowedModules: next });
+    const result = await updateTeamMember(member.id, { allowedModules: next });
+    if (!result.ok) {
+      setErrorBanner(result.error || 'Erro ao salvar permissões de módulo no MySQL.');
+    }
   };
 
-  const toggleCrudPermission = (
+  const toggleCrudPermission = async (
     member: TeamMember,
     key: keyof UserPermissions
   ) => {
+    if (!isSuperAdmin) return;
     const base = member.permissions ?? ROLE_PRESETS[member.role].permissions;
-    updateTeamMember(member.id, {
+    const result = await updateTeamMember(member.id, {
       permissions: { ...base, [key]: !base[key] },
     });
+    if (!result.ok) {
+      setErrorBanner(result.error || 'Erro ao salvar permissões no MySQL.');
+    }
   };
 
   const openEditProfileModal = (member: TeamMember) => {
-    setEditingProfileDraft({ ...member });
+    setErrorBanner(null);
+    setEditingProfileDraft({
+      ...member,
+      loginName: deriveSimpleLogin(member),
+    });
+    setEditNewPassword('');
+    setShowEditPassword(false);
     setApplyRolePresetOnSave(false);
   };
 
-  const handleSaveProfileDraft = (e: React.FormEvent) => {
+  const handleSaveProfileDraft = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingProfileDraft) return;
-    if (!editingProfileDraft.name.trim() || !editingProfileDraft.email.trim()) return;
+    if (!editingProfileDraft || savingUser) return;
+
+    const cleanName = editingProfileDraft.name.trim();
+    const cleanLogin = slugifySimpleLogin(
+      editingProfileDraft.loginName || deriveSimpleLogin(editingProfileDraft)
+    );
+    const cleanEmail =
+      editingProfileDraft.email.trim().toLowerCase() ||
+      (cleanLogin ? `${cleanLogin}@fortmidia.local` : '');
+
+    if (!cleanName) {
+      setErrorBanner('Informe o nome completo do usuário.');
+      return;
+    }
+
+    const trimmedNewPass = editNewPassword.trim();
+    if (isSuperAdmin && trimmedNewPass.length > 0 && trimmedNewPass.length < 6) {
+      setErrorBanner('A nova senha deve ter pelo menos 6 caracteres.');
+      return;
+    }
 
     const preset = ROLE_PRESETS[editingProfileDraft.role];
     const patch: Partial<TeamMember> = {
-      name: editingProfileDraft.name.trim(),
-      role: editingProfileDraft.role,
-      hierarchyLevel: editingProfileDraft.hierarchyLevel,
+      name: cleanName,
       department: editingProfileDraft.department.trim() || 'Operações FortMídia',
-      email: editingProfileDraft.email.trim(),
       phone: editingProfileDraft.phone.trim() || '(11) 95779-2424',
-      password: editingProfileDraft.password.trim() || 'fortmidia2026',
       avatarUrl:
         editingProfileDraft.avatarUrl.trim() ||
         '/assets/aistudio/Log_tipo_3D_Fortmidia_em_destaque_6b2bcf98.png',
       bio: editingProfileDraft.bio.trim(),
-      active: editingProfileDraft.active,
       linkedClientName: editingProfileDraft.linkedClientName?.trim() || undefined,
     };
 
-    if (applyRolePresetOnSave) {
-      patch.hierarchyLevel = preset.hierarchyLevel;
-      patch.allowedModules = [...preset.allowedModules];
-      patch.permissions = { ...preset.permissions };
+    if (isSuperAdmin) {
+      patch.loginName = cleanLogin || undefined;
+      patch.email = cleanEmail;
+      patch.role = editingProfileDraft.role;
+      patch.hierarchyLevel = editingProfileDraft.hierarchyLevel;
+      patch.active = editingProfileDraft.active;
+
+      if (trimmedNewPass.length >= 6) {
+        patch.password = trimmedNewPass;
+      }
+
+      if (applyRolePresetOnSave) {
+        patch.hierarchyLevel = preset.hierarchyLevel;
+        patch.allowedModules = [...preset.allowedModules];
+        patch.permissions = { ...preset.permissions };
+      }
     }
 
-    updateTeamMember(editingProfileDraft.id, patch);
-    setEditingProfileDraft(null);
-    showTempNotice(`Usuário "${patch.name}" atualizado com sucesso.`);
+    setSavingUser(true);
+    setErrorBanner(null);
+    try {
+      const result = await updateTeamMember(editingProfileDraft.id, patch);
+      if (!result.ok) {
+        setErrorBanner(
+          result.error || 'Falha ao gravar as credenciais na tabela users do MySQL.'
+        );
+        return;
+      }
+
+      setEditingProfileDraft(null);
+      setEditNewPassword('');
+      setShowEditPassword(false);
+      showTempNotice(
+        result.savedInMysql
+          ? trimmedNewPass
+            ? `Credenciais e nova senha de "${cleanName}" (login: ${cleanLogin || cleanEmail}) salvas na tabela users do MySQL.`
+            : `Cadastro de "${cleanName}" (login: ${cleanLogin || cleanEmail}) salvo na tabela users do MySQL.`
+          : `Usuário "${cleanName}" atualizado com sucesso.`
+      );
+    } finally {
+      setSavingUser(false);
+    }
+  };
+
+  const handleDeleteMember = async (member: TeamMember) => {
+    if (!isSuperAdmin) return;
+    const result = await deleteTeamMember(member.id);
+    if (!result.ok) {
+      setErrorBanner(result.error || 'Não foi possível excluir o usuário no MySQL.');
+      return;
+    }
+    showTempNotice(`Usuário "${member.name}" removido do sistema.`);
   };
 
   const editingMember =
@@ -240,29 +388,60 @@ export const TeamUsersModule: React.FC = () => {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-display text-2xl font-bold text-white">
-            Hierarquia, Usuários & Permissões de Acesso
+            Hierarquia, Usuários &amp; Permissões de Acesso
           </h1>
           <p className="mt-1 text-xs text-zinc-400">
-            Super Admin possui controle absoluto (visualizar, editar, aprovar e excluir). Gerencie perfis de Administradores, Redatores, Repórteres, Apresentadores e Área do Cliente.
+            Apenas o <strong className="text-white">Super Admin</strong> pode cadastrar usuários, criar ou redefinir senhas e salvar credenciais na tabela <code className="text-[#fa6607]">users</code>. O acesso ao painel funciona tanto com <strong className="text-zinc-200">nome simples</strong> quanto com e-mail.
           </p>
         </div>
 
-        {canManageUsers && (
+        {isSuperAdmin ? (
           <button
             type="button"
-            onClick={() => setShowCreateForm((v) => !v)}
+            onClick={() => {
+              setErrorBanner(null);
+              setShowCreateForm((v) => !v);
+            }}
             className="inline-flex items-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#e55a00] cursor-pointer whitespace-nowrap self-start sm:self-auto"
           >
             <Plus className="h-4 w-4" aria-hidden="true" />
-            {showCreateForm ? 'Fechar Cadastro' : 'Cadastrar Pessoa / Cliente'}
+            {showCreateForm ? 'Fechar Cadastro' : 'Cadastrar Usuário / Senha'}
           </button>
+        ) : (
+          <div className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3.5 py-2 text-[11px] font-medium text-amber-200 self-start sm:self-auto">
+            <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            Criação de senhas restrita ao Super Admin
+          </div>
         )}
       </div>
 
       {notice && (
-        <div className="flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-xs font-medium text-emerald-300">
+        <div
+          role="status"
+          className="flex items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-xs font-medium text-emerald-300"
+        >
           <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span>{notice}</span>
+        </div>
+      )}
+
+      {errorBanner && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 rounded-xl border border-red-500/40 bg-red-950/50 px-4 py-3 text-xs font-medium text-red-200"
+        >
+          <span className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" aria-hidden="true" />
+            <span>{errorBanner}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setErrorBanner(null)}
+            aria-label="Fechar aviso de erro"
+            className="rounded p-1 text-red-300 hover:bg-white/10 cursor-pointer"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 
@@ -286,7 +465,7 @@ export const TeamUsersModule: React.FC = () => {
                 {activeUser.name}
               </div>
               <div className="text-xs text-zinc-400 truncate">
-                {activeUser.role} · {activeUser.department} · {activeUser.email}
+                Login simples: <span className="font-mono text-zinc-200">{deriveSimpleLogin(activeUser)}</span> · {activeUser.role} · {activeUser.email}
               </div>
             </div>
           </div>
@@ -297,6 +476,11 @@ export const TeamUsersModule: React.FC = () => {
               <span className="rounded border border-white/10 bg-black/40 px-2 py-0.5">
                 {activeUser.allowedModules?.length ?? 0} módulos liberados
               </span>
+              {isSuperAdmin && (
+                <span className="rounded border border-[#fa6607]/40 bg-[#fa6607]/15 px-2 py-0.5 text-[#fa6607] font-semibold">
+                  Gestão de Senhas (Super Admin)
+                </span>
+              )}
               {activeUser.permissions?.canEdit && (
                 <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-300">
                   Editar
@@ -317,16 +501,27 @@ export const TeamUsersModule: React.FC = () => {
         </div>
       )}
 
-      {/* Create New Team Member Form */}
-      {showCreateForm && (
+      {/* Create New Team Member Form — Exclusivo Super Admin */}
+      {showCreateForm && isSuperAdmin && (
         <form
-          onSubmit={handleCreate}
+          onSubmit={(e) => void handleCreate(e)}
           className="rounded-xl border border-[#FF6600]/40 bg-[#121215] p-6 space-y-5"
         >
-          <div className="border-b border-white/10 pb-3 flex items-center justify-between">
-            <h2 className="font-display text-sm font-bold text-white">
-              Cadastrar Novo Usuário, Colaborador, Apresentador ou Cliente
-            </h2>
+          <div className="border-b border-white/10 pb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-sm font-bold text-white">
+                Cadastrar Novo Usuário &amp; Credenciais de Acesso (Super Admin)
+              </h2>
+              <p className="mt-0.5 text-[11px] text-zinc-400">
+                As credenciais são gravadas diretamente na tabela <code className="text-[#fa6607]">users</code> do MySQL com criptografia bcrypt.
+              </p>
+            </div>
+            {apiMode === 'online' && (
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/35 bg-emerald-950/40 px-2.5 py-1 text-[11px] font-medium text-emerald-300">
+                <Database className="h-3.5 w-3.5" aria-hidden="true" />
+                Gravação direta no MySQL
+              </span>
+            )}
           </div>
 
           <div className="grid gap-6 lg:grid-cols-12">
@@ -367,7 +562,13 @@ export const TeamUsersModule: React.FC = () => {
                     type="text"
                     required
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setName(val);
+                      if (!loginTouched) {
+                        setLoginName(slugifySimpleLogin(val.split(/\s+/)[0] || ''));
+                      }
+                    }}
                     placeholder="Ex.: Rafael Nogueira"
                     className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white focus:border-[#FF6600] focus:outline-none"
                   />
@@ -417,18 +618,78 @@ export const TeamUsersModule: React.FC = () => {
                 </div>
               )}
 
-              <div className="grid gap-4 sm:grid-cols-3">
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">E-mail de Login *</label>
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="nome@fortmidia.com.br"
-                    className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
-                  />
+              {/* Credenciais de Login (Login Simples + E-mail + Senha exclusiva Super Admin) */}
+              <div className="rounded-xl border border-[#fa6607]/30 bg-[#0A0A0A] p-4 space-y-3">
+                <div className="flex items-center gap-2 text-xs font-semibold text-[#fa6607]">
+                  <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+                  Credenciais de Acesso (exclusivo Super Admin)
                 </div>
+
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div>
+                    <label className="block text-xs text-zinc-300 mb-1">
+                      Login Simples (nome curto) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={loginName}
+                      onChange={(e) => {
+                        setLoginTouched(true);
+                        setLoginName(slugifySimpleLogin(e.target.value));
+                      }}
+                      placeholder="Ex.: rafael, maria, comercial"
+                      className="w-full rounded-lg border border-white/15 bg-[#121215] px-3 py-2 font-mono text-xs text-white focus:border-[#fa6607] focus:outline-none"
+                    />
+                    <p className="mt-1 text-[10px] text-zinc-500">
+                      Permite entrar digitando apenas este nome.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-400 mb-1">
+                      E-mail (opcional se houver login simples)
+                    </label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="nome@fortmidia.com.br"
+                      className="w-full rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white focus:border-[#fa6607] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-300 mb-1">
+                      Senha de Acesso (mín. 6 caracteres) *
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showCreatePassword ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        autoComplete="new-password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Digite a senha inicial"
+                        className="w-full rounded-lg border border-white/15 bg-[#121215] pl-3 pr-9 py-2 font-mono text-xs text-white focus:border-[#fa6607] focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowCreatePassword((v) => !v)}
+                        aria-label={showCreatePassword ? 'Ocultar senha' : 'Mostrar senha'}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-white cursor-pointer"
+                      >
+                        {showCreatePassword ? (
+                          <EyeOff className="h-3.5 w-3.5" />
+                        ) : (
+                          <Eye className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1">WhatsApp / Telefone</label>
                   <input
@@ -440,27 +701,15 @@ export const TeamUsersModule: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-zinc-400 mb-1">Chave / Senha de Acesso</label>
+                  <label className="block text-xs text-zinc-400 mb-1">Bio / Atribuições</label>
                   <input
                     type="text"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 font-mono text-xs text-white"
+                    value={bio}
+                    onChange={(e) => setBio(e.target.value)}
+                    placeholder="Responsabilidades comerciais, editoriais ou técnicas..."
+                    className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
                   />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs text-zinc-400 mb-1">
-                  Bio / Atribuições
-                </label>
-                <textarea
-                  rows={2}
-                  value={bio}
-                  onChange={(e) => setBio(e.target.value)}
-                  placeholder="Responsabilidades comerciais, editoriais ou técnicas..."
-                  className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
-                />
               </div>
 
               <div className="flex justify-end gap-2">
@@ -473,9 +722,11 @@ export const TeamUsersModule: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="rounded-lg bg-[#FF6600] px-5 py-2 text-xs font-semibold text-white hover:bg-[#FF5500] cursor-pointer"
+                  disabled={savingUser}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#FF6600] px-5 py-2 text-xs font-semibold text-white hover:bg-[#FF5500] disabled:opacity-60 cursor-pointer"
                 >
-                  Salvar Perfil com Permissões
+                  <Save className="h-3.5 w-3.5" aria-hidden="true" />
+                  {savingUser ? 'Salvando em Usuários...' : 'Salvar Credenciais em Usuários'}
                 </button>
               </div>
             </div>
@@ -520,6 +771,9 @@ export const TeamUsersModule: React.FC = () => {
           const isCurrent = member.id === activeUser?.id;
           const perms = member.permissions ?? ROLE_PRESETS[member.role].permissions;
           const level = member.hierarchyLevel ?? ROLE_PRESETS[member.role].hierarchyLevel;
+          const simpleLogin = deriveSimpleLogin(member);
+          const canEditThisMember =
+            isSuperAdmin || (canEditBasicProfiles && level !== 1);
 
           return (
             <div
@@ -551,9 +805,9 @@ export const TeamUsersModule: React.FC = () => {
                           accept="image/*"
                           className="hidden"
                           onChange={(e) =>
-                            handlePhotoUpload(e, (url) =>
-                              updateTeamMember(member.id, { avatarUrl: url })
-                            )
+                            handlePhotoUpload(e, (url) => {
+                              void updateTeamMember(member.id, { avatarUrl: url });
+                            })
                           }
                         />
                       </label>
@@ -570,24 +824,25 @@ export const TeamUsersModule: React.FC = () => {
                         <Shield className="h-2.5 w-2.5" />
                         Nível {level}
                       </span>
+                      {simpleLogin && (
+                        <span className="inline-flex items-center gap-1 rounded border border-white/10 bg-black/50 px-1.5 py-0.5 font-mono text-[10px] text-zinc-200">
+                          <AtSign className="h-2.5 w-2.5 text-[#fa6607]" aria-hidden="true" />
+                          {simpleLogin}
+                        </span>
+                      )}
                       {member.linkedClientName && (
                         <span className="text-[10px] text-emerald-300 font-medium">
                           Cliente: {member.linkedClientName}
                         </span>
                       )}
                     </div>
-                    <input
-                      type="text"
-                      disabled={!isSuperAdmin}
-                      value={member.name}
-                      onChange={(e) => updateTeamMember(member.id, { name: e.target.value })}
-                      aria-label={`Nome de ${member.name}`}
-                      className="mt-1 w-full bg-transparent font-display text-base font-bold text-white focus:outline-none focus:underline disabled:opacity-90"
-                    />
+                    <h3 className="mt-1 font-display text-base font-bold text-white truncate">
+                      {member.name}
+                    </h3>
                     <select
                       disabled={!isSuperAdmin}
                       value={member.role}
-                      onChange={(e) => applyRoleChange(member, e.target.value as TeamRole)}
+                      onChange={(e) => void applyRoleChange(member, e.target.value as TeamRole)}
                       aria-label={`Função de ${member.name}`}
                       className="mt-1 rounded border border-white/10 bg-[#0A0A0A] px-2 py-0.5 text-[11px] font-semibold text-[#D4AF37] disabled:opacity-75"
                     >
@@ -601,30 +856,32 @@ export const TeamUsersModule: React.FC = () => {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveAdminUserId(member.id);
-                      showTempNotice(`Operando painel agora como ${member.name} (${member.role}).`);
-                    }}
-                    className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer ${
-                      isCurrent
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                        : 'border border-white/15 text-zinc-200 hover:bg-white/5'
-                    }`}
-                  >
-                    <UserCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                    {isCurrent ? 'Ativo' : 'Testar Perfil'}
-                  </button>
+                  {isSuperAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveAdminUserId(member.id);
+                        showTempNotice(`Visualizando painel como ${member.name} (${member.role}).`);
+                      }}
+                      className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold cursor-pointer ${
+                        isCurrent
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'border border-white/15 text-zinc-200 hover:bg-white/5'
+                      }`}
+                    >
+                      <UserCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                      {isCurrent ? 'Ativo' : 'Testar'}
+                    </button>
+                  )}
 
-                  {canManageUsers && (
+                  {canEditThisMember && (
                     <button
                       type="button"
                       onClick={() => openEditProfileModal(member)}
                       className="inline-flex items-center gap-1 rounded-lg border border-[#fa6607]/45 bg-[#fa6607]/15 px-2.5 py-1.5 text-[11px] font-semibold text-[#fa6607] hover:bg-[#fa6607] hover:text-white transition-colors cursor-pointer"
                     >
                       <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                      Editar
+                      {isSuperAdmin ? 'Editar & Senha' : 'Editar'}
                     </button>
                   )}
 
@@ -639,10 +896,10 @@ export const TeamUsersModule: React.FC = () => {
                     </button>
                   )}
 
-                  {isSuperAdmin && teamMembers.length > 1 && (
+                  {isSuperAdmin && teamMembers.length > 1 && !isCurrent && (
                     <button
                       type="button"
-                      onClick={() => deleteTeamMember(member.id)}
+                      onClick={() => void handleDeleteMember(member)}
                       aria-label={`Remover ${member.name}`}
                       className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 text-zinc-400 hover:border-red-500/40 hover:text-red-400 cursor-pointer"
                     >
@@ -684,17 +941,19 @@ export const TeamUsersModule: React.FC = () => {
                   <Phone className="h-3.5 w-3.5 text-[#FF6600] shrink-0" aria-hidden="true" />
                   <span className="truncate">{member.phone}</span>
                 </div>
-                <div className="flex items-center gap-1.5 justify-between sm:justify-end">
-                  <span className="inline-flex items-center gap-1 font-mono text-zinc-400">
-                    <KeyRound className="h-3 w-3" aria-hidden="true" />
-                    {member.password}
+                <div className="flex items-center gap-2 justify-between sm:justify-end">
+                  <span className="inline-flex items-center gap-1 text-[10px] text-zinc-400">
+                    <Lock className="h-3 w-3 text-[#D4AF37]" aria-hidden="true" />
+                    Senha protegida
                   </span>
                   <label className="inline-flex items-center gap-1 cursor-pointer">
                     <input
                       type="checkbox"
                       disabled={!isSuperAdmin}
                       checked={member.active}
-                      onChange={(e) => updateTeamMember(member.id, { active: e.target.checked })}
+                      onChange={(e) =>
+                        void updateTeamMember(member.id, { active: e.target.checked })
+                      }
                       className="accent-[#FF6600]"
                     />
                     <span className={member.active ? 'text-emerald-400' : 'text-zinc-500'}>
@@ -708,7 +967,7 @@ export const TeamUsersModule: React.FC = () => {
         })}
       </div>
 
-      {/* Full User Profile Editor Modal */}
+      {/* Full User Profile & Credentials Editor Modal */}
       {editingProfileDraft && (
         <div
           role="dialog"
@@ -717,14 +976,16 @@ export const TeamUsersModule: React.FC = () => {
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
         >
           <form
-            onSubmit={handleSaveProfileDraft}
+            onSubmit={(e) => void handleSaveProfileDraft(e)}
             className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl border border-[#fa6607]/40 bg-[#121215] p-6 shadow-2xl space-y-5"
           >
             <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-3">
               <div>
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-[#fa6607]">
                   <Edit3 className="h-3.5 w-3.5" aria-hidden="true" />
-                  Editar Cadastro &amp; Hierarquia de Usuário
+                  {isSuperAdmin
+                    ? 'Editar Cadastro, Login Simples & Senha (Super Admin)'
+                    : 'Editar Dados do Perfil'}
                 </div>
                 <h3 id="edit-user-modal-title" className="mt-1 font-display text-lg font-bold text-white">
                   {editingProfileDraft.name}
@@ -739,6 +1000,16 @@ export const TeamUsersModule: React.FC = () => {
                 <X className="h-4 w-4" />
               </button>
             </div>
+
+            {errorBanner && (
+              <div
+                role="alert"
+                className="flex items-center gap-2 rounded-lg border border-red-500/40 bg-red-950/50 px-3.5 py-2.5 text-xs text-red-200"
+              >
+                <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" aria-hidden="true" />
+                <span>{errorBanner}</span>
+              </div>
+            )}
 
             <div className="grid gap-6 lg:grid-cols-12">
               {/* Avatar Column */}
@@ -773,17 +1044,22 @@ export const TeamUsersModule: React.FC = () => {
                   placeholder="URL da foto de perfil..."
                   className="w-full rounded-lg border border-white/10 bg-[#121215] px-2.5 py-1.5 text-[11px] text-zinc-300"
                 />
-                <label className="inline-flex items-center gap-2 pt-1 text-xs text-zinc-200 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={editingProfileDraft.active}
-                    onChange={(e) =>
-                      setEditingProfileDraft({ ...editingProfileDraft, active: e.target.checked })
-                    }
-                    className="accent-[#fa6607]"
-                  />
-                  <span>Usuário Ativo no Sistema</span>
-                </label>
+                {isSuperAdmin && (
+                  <label className="inline-flex items-center gap-2 pt-1 text-xs text-zinc-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editingProfileDraft.active}
+                      onChange={(e) =>
+                        setEditingProfileDraft({
+                          ...editingProfileDraft,
+                          active: e.target.checked,
+                        })
+                      }
+                      className="accent-[#fa6607]"
+                    />
+                    <span>Usuário Ativo no Sistema</span>
+                  </label>
+                )}
               </div>
 
               {/* Details Column */}
@@ -807,60 +1083,65 @@ export const TeamUsersModule: React.FC = () => {
                       type="text"
                       value={editingProfileDraft.department}
                       onChange={(e) =>
-                        setEditingProfileDraft({ ...editingProfileDraft, department: e.target.value })
+                        setEditingProfileDraft({
+                          ...editingProfileDraft,
+                          department: e.target.value,
+                        })
                       }
                       className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white focus:border-[#fa6607] focus:outline-none"
                     />
                   </div>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="block text-xs text-zinc-400 mb-1">Hierarquia / Cargo</label>
-                    <select
-                      value={editingProfileDraft.role}
-                      onChange={(e) => {
-                        const nextRole = e.target.value as TeamRole;
-                        const preset = ROLE_PRESETS[nextRole];
-                        setEditingProfileDraft({
-                          ...editingProfileDraft,
-                          role: nextRole,
-                          hierarchyLevel: preset.hierarchyLevel,
-                        });
-                        setApplyRolePresetOnSave(true);
-                      }}
-                      className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
-                    >
-                      {TEAM_ROLES.map((r) => (
-                        <option key={r} value={r}>
-                          Nível {ROLE_PRESETS[r].hierarchyLevel} · {r}
-                        </option>
-                      ))}
-                    </select>
+                {isSuperAdmin && (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-xs text-zinc-400 mb-1">Hierarquia / Cargo</label>
+                      <select
+                        value={editingProfileDraft.role}
+                        onChange={(e) => {
+                          const nextRole = e.target.value as TeamRole;
+                          const preset = ROLE_PRESETS[nextRole];
+                          setEditingProfileDraft({
+                            ...editingProfileDraft,
+                            role: nextRole,
+                            hierarchyLevel: preset.hierarchyLevel,
+                          });
+                          setApplyRolePresetOnSave(true);
+                        }}
+                        className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
+                      >
+                        {TEAM_ROLES.map((r) => (
+                          <option key={r} value={r}>
+                            Nível {ROLE_PRESETS[r].hierarchyLevel} · {r}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-zinc-400 mb-1">Nível Hierárquico</label>
+                      <select
+                        value={editingProfileDraft.hierarchyLevel}
+                        onChange={(e) =>
+                          setEditingProfileDraft({
+                            ...editingProfileDraft,
+                            hierarchyLevel: Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6,
+                          })
+                        }
+                        className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
+                      >
+                        <option value={1}>Nível 1 · Super Admin (Controle Total)</option>
+                        <option value={2}>Nível 2 · Administrador Geral</option>
+                        <option value={3}>Nível 3 · Chefia / Redator-Chefe</option>
+                        <option value={4}>Nível 4 · Apresentador / Executivo / Financeiro</option>
+                        <option value={5}>Nível 5 · Repórter / Designer / Produtor</option>
+                        <option value={6}>Nível 6 · Cliente / Anunciante</option>
+                      </select>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs text-zinc-400 mb-1">Nível Hierárquico</label>
-                    <select
-                      value={editingProfileDraft.hierarchyLevel}
-                      onChange={(e) =>
-                        setEditingProfileDraft({
-                          ...editingProfileDraft,
-                          hierarchyLevel: Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6,
-                        })
-                      }
-                      className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
-                    >
-                      <option value={1}>Nível 1 · Super Admin (Controle Total)</option>
-                      <option value={2}>Nível 2 · Administrador Geral</option>
-                      <option value={3}>Nível 3 · Chefia / Redator-Chefe</option>
-                      <option value={4}>Nível 4 · Apresentador / Executivo / Financeiro</option>
-                      <option value={5}>Nível 5 · Repórter / Designer / Produtor</option>
-                      <option value={6}>Nível 6 · Cliente / Anunciante</option>
-                    </select>
-                  </div>
-                </div>
+                )}
 
-                {applyRolePresetOnSave && (
+                {isSuperAdmin && applyRolePresetOnSave && (
                   <label className="flex items-center gap-2 rounded-lg border border-[#D4AF37]/30 bg-[#D4AF37]/10 px-3 py-2 text-[11px] text-[#E6C868] cursor-pointer">
                     <input
                       type="checkbox"
@@ -872,19 +1153,88 @@ export const TeamUsersModule: React.FC = () => {
                   </label>
                 )}
 
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div>
-                    <label className="block text-xs text-zinc-400 mb-1">E-mail de Login *</label>
-                    <input
-                      type="email"
-                      required
-                      value={editingProfileDraft.email}
-                      onChange={(e) =>
-                        setEditingProfileDraft({ ...editingProfileDraft, email: e.target.value })
-                      }
-                      className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
-                    />
+                {/* Credenciais & Senha — Restrito ao Super Admin */}
+                {isSuperAdmin ? (
+                  <div className="rounded-xl border border-[#fa6607]/30 bg-[#0A0A0A] p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#fa6607]">
+                        <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+                        Credenciais de Login (tabela users)
+                      </span>
+                      <span className="text-[10px] text-zinc-400">Exclusivo Super Admin</span>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div>
+                        <label className="block text-xs text-zinc-300 mb-1">
+                          Login Simples (nome)
+                        </label>
+                        <input
+                          type="text"
+                          value={editingProfileDraft.loginName || ''}
+                          onChange={(e) =>
+                            setEditingProfileDraft({
+                              ...editingProfileDraft,
+                              loginName: slugifySimpleLogin(e.target.value),
+                            })
+                          }
+                          placeholder="Ex.: emerson, joao"
+                          className="w-full rounded-lg border border-white/15 bg-[#121215] px-3 py-2 font-mono text-xs text-white focus:border-[#fa6607] focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-zinc-400 mb-1">E-mail</label>
+                        <input
+                          type="email"
+                          value={editingProfileDraft.email}
+                          onChange={(e) =>
+                            setEditingProfileDraft({
+                              ...editingProfileDraft,
+                              email: e.target.value,
+                            })
+                          }
+                          className="w-full rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white focus:border-[#fa6607] focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-zinc-300 mb-1">
+                          Nova Senha (opcional)
+                        </label>
+                        <div className="relative">
+                          <input
+                            type={showEditPassword ? 'text' : 'password'}
+                            autoComplete="new-password"
+                            value={editNewPassword}
+                            onChange={(e) => setEditNewPassword(e.target.value)}
+                            placeholder="Manter senha atual"
+                            className="w-full rounded-lg border border-white/15 bg-[#121215] pl-3 pr-9 py-2 font-mono text-xs text-white focus:border-[#fa6607] focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowEditPassword((v) => !v)}
+                            aria-label={showEditPassword ? 'Ocultar nova senha' : 'Mostrar nova senha'}
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-zinc-400 hover:text-white cursor-pointer"
+                          >
+                            {showEditPassword ? (
+                              <EyeOff className="h-3.5 w-3.5" />
+                            ) : (
+                              <Eye className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   </div>
+                ) : (
+                  <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-200">
+                    <Lock className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>
+                      Apenas o Super Admin pode alterar login, e-mail de acesso, hierarquia ou definir senhas.
+                    </span>
+                  </div>
+                )}
+
+                <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="block text-xs text-zinc-400 mb-1">WhatsApp / Telefone</label>
                     <input
@@ -898,34 +1248,22 @@ export const TeamUsersModule: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-zinc-400 mb-1">Senha de Acesso</label>
+                    <label className="block text-xs text-zinc-400 mb-1">
+                      Empresa Cliente Vinculada (opcional)
+                    </label>
                     <input
                       type="text"
-                      value={editingProfileDraft.password}
+                      value={editingProfileDraft.linkedClientName || ''}
                       onChange={(e) =>
-                        setEditingProfileDraft({ ...editingProfileDraft, password: e.target.value })
+                        setEditingProfileDraft({
+                          ...editingProfileDraft,
+                          linkedClientName: e.target.value || undefined,
+                        })
                       }
-                      className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 font-mono text-xs text-white"
+                      placeholder="Ex.: Auto Shopping Franco"
+                      className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
                     />
                   </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">
-                    Empresa Cliente Vinculada (opcional — para perfil Cliente / Anunciante)
-                  </label>
-                  <input
-                    type="text"
-                    value={editingProfileDraft.linkedClientName || ''}
-                    onChange={(e) =>
-                      setEditingProfileDraft({
-                        ...editingProfileDraft,
-                        linkedClientName: e.target.value || undefined,
-                      })
-                    }
-                    placeholder="Ex.: Auto Shopping Franco"
-                    className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
-                  />
                 </div>
 
                 <div>
@@ -970,10 +1308,15 @@ export const TeamUsersModule: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#fa6607] px-5 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] cursor-pointer"
+                  disabled={savingUser}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#fa6607] px-5 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
                 >
                   <Save className="h-3.5 w-3.5" aria-hidden="true" />
-                  Salvar Alterações
+                  {savingUser
+                    ? 'Gravando no Banco...'
+                    : isSuperAdmin
+                      ? 'Salvar Credenciais em Usuários'
+                      : 'Salvar Alterações'}
                 </button>
               </div>
             </div>
@@ -982,7 +1325,7 @@ export const TeamUsersModule: React.FC = () => {
       )}
 
       {/* Granular Permissions Editor Modal (Super Admin Only) */}
-      {editingMember && (
+      {editingMember && isSuperAdmin && (
         <div
           role="dialog"
           aria-modal="true"
@@ -1016,7 +1359,7 @@ export const TeamUsersModule: React.FC = () => {
                 <select
                   value={editingMember.hierarchyLevel}
                   onChange={(e) =>
-                    updateTeamMember(editingMember.id, {
+                    void updateTeamMember(editingMember.id, {
                       hierarchyLevel: Number(e.target.value) as 1 | 2 | 3 | 4 | 5 | 6,
                     })
                   }
@@ -1036,10 +1379,10 @@ export const TeamUsersModule: React.FC = () => {
                 </label>
                 <input
                   type="text"
-                  value={editingMember.linkedClientName || ''}
-                  onChange={(e) =>
-                    updateTeamMember(editingMember.id, {
-                      linkedClientName: e.target.value || undefined,
+                  defaultValue={editingMember.linkedClientName || ''}
+                  onBlur={(e) =>
+                    void updateTeamMember(editingMember.id, {
+                      linkedClientName: e.target.value.trim() || undefined,
                     })
                   }
                   placeholder="Ex.: Auto Shopping Franco"
@@ -1075,7 +1418,7 @@ export const TeamUsersModule: React.FC = () => {
                       <input
                         type="checkbox"
                         checked={checked}
-                        onChange={() => toggleCrudPermission(editingMember, key)}
+                        onChange={() => void toggleCrudPermission(editingMember, key)}
                         className="accent-[#FF6600]"
                       />
                       <span>{label}</span>
@@ -1095,7 +1438,9 @@ export const TeamUsersModule: React.FC = () => {
                   <button
                     type="button"
                     onClick={() =>
-                      updateTeamMember(editingMember.id, { allowedModules: [...ALL_ADMIN_TABS] })
+                      void updateTeamMember(editingMember.id, {
+                        allowedModules: [...ALL_ADMIN_TABS],
+                      })
                     }
                     className="text-[11px] text-[#FF6600] hover:underline cursor-pointer"
                   >
@@ -1103,7 +1448,7 @@ export const TeamUsersModule: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => applyRoleChange(editingMember, editingMember.role)}
+                    onClick={() => void applyRoleChange(editingMember, editingMember.role)}
                     className="text-[11px] text-zinc-400 hover:text-white cursor-pointer"
                   >
                     Restaurar Padrão do Cargo
@@ -1126,7 +1471,7 @@ export const TeamUsersModule: React.FC = () => {
                       <input
                         type="checkbox"
                         checked={active}
-                        onChange={() => toggleModulePermission(editingMember, tabId)}
+                        onChange={() => void toggleModulePermission(editingMember, tabId)}
                         className="accent-[#FF6600]"
                       />
                       <span className="truncate">{MODULE_LABELS[tabId]}</span>
@@ -1141,7 +1486,7 @@ export const TeamUsersModule: React.FC = () => {
                 type="button"
                 onClick={() => {
                   setEditingMemberId(null);
-                  showTempNotice('Permissões salvas com sucesso.');
+                  showTempNotice('Permissões salvas na tabela de usuários.');
                 }}
                 className="rounded-lg bg-[#FF6600] px-5 py-2 text-xs font-semibold text-white hover:bg-[#FF5500] cursor-pointer"
               >
@@ -1156,7 +1501,7 @@ export const TeamUsersModule: React.FC = () => {
       <div className="rounded-xl border border-white/10 bg-[#111114] p-4 flex items-center gap-3 text-xs text-zinc-400">
         <Users className="h-4 w-4 text-[#D4AF37] shrink-0" aria-hidden="true" />
         <span>
-          Super Admin tem liberdade total para criar, editar, aprovar e excluir usuários, matérias, contratos e cadastros. Clientes cadastrados como Nível 6 enxergam apenas sua área de veiculações e aprovações.
+          Apenas o Super Admin (Nível 1) pode criar contas, definir ou alterar senhas e ajustar permissões. Todos os usuários salvos na tabela <code className="text-zinc-200">users</code> podem acessar o painel informando apenas o <strong className="text-zinc-200">login simples</strong> ou o e-mail.
         </span>
       </div>
     </div>

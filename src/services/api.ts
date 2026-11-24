@@ -18,20 +18,33 @@ import {
 const RAW_API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api';
 export const API_BASE_URL = RAW_API_BASE.replace(/\/+$/, '') || '/api';
 
-// In-memory Bearer token (never persisted in localStorage/sessionStorage for security)
+// In-memory Bearer token + server-verified HttpOnly session cookie flag (never persisted in localStorage/sessionStorage)
 let memoryAuthToken: string | null = null;
+let serverCookieSessionActive = false;
 let apiKnownOnline = false;
 
 export function setApiAuthToken(token: string | null): void {
   memoryAuthToken = token && token.trim() ? token.trim() : null;
+  if (memoryAuthToken) {
+    serverCookieSessionActive = true;
+  }
 }
 
 export function getApiAuthToken(): string | null {
   return memoryAuthToken;
 }
 
+export function setHasServerSession(active: boolean): void {
+  serverCookieSessionActive = active;
+}
+
+export function hasApiSession(): boolean {
+  return Boolean(memoryAuthToken || serverCookieSessionActive);
+}
+
 export function clearApiAuthToken(): void {
   memoryAuthToken = null;
+  serverCookieSessionActive = false;
 }
 
 export function setApiOnlineStatus(online: boolean): void {
@@ -72,6 +85,7 @@ export async function apiRequest<T>(
 
   const headers: Record<string, string> = {
     Accept: 'application/json',
+    'X-Requested-With': 'XMLHttpRequest',
   };
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
@@ -84,6 +98,7 @@ export async function apiRequest<T>(
     const response = await fetch(buildUrl(path), {
       method,
       headers,
+      credentials: 'include',
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
@@ -351,16 +366,24 @@ export function normalizeClientTask(row: RawRow): ClientServiceTask {
 }
 
 export function normalizeTeamMember(row: RawRow): TeamMember {
+  const email = str(row.email);
+  const name = str(row.name, 'Usuário');
+  const rawLogin = str(row.loginName ?? row.login_name);
+  const derivedLogin =
+    rawLogin ||
+    (email.includes('@') ? email.split('@')[0] : name.split(' ')[0].toLowerCase());
+
   return {
     id: str(row.id, `usr-${Date.now()}`),
-    name: str(row.name, 'Usuário'),
+    name,
+    loginName: derivedLogin || undefined,
     role: (str(row.role, 'Executivo Comercial') as TeamMember['role']),
     hierarchyLevel: (Math.min(
       6,
       Math.max(1, num(row.hierarchyLevel ?? row.hierarchy_level, 4))
     ) as TeamMember['hierarchyLevel']),
     department: str(row.department, 'Operações FortMídia'),
-    email: str(row.email),
+    email,
     phone: str(row.phone),
     password: '',
     avatarUrl: str(
@@ -407,7 +430,18 @@ export const authApi = {
     }
     return res;
   },
-  me: () => apiRequest<{ user: Omit<TeamMember, 'password'> }>('/auth/me'),
+  me: async () => {
+    const res = await apiRequest<{ user: Omit<TeamMember, 'password'>; sessionActive?: boolean }>(
+      '/auth/me',
+      { timeoutMs: 5000 }
+    );
+    if (res.ok && res.data?.user) {
+      setHasServerSession(true);
+    } else if (res.status === 401) {
+      clearApiAuthToken();
+    }
+    return res;
+  },
   logout: async () => {
     const res = await apiRequest<{ ok: boolean }>('/auth/logout', { method: 'POST' });
     clearApiAuthToken();
@@ -420,11 +454,11 @@ export const authApi = {
  * ============================================================================ */
 export const stateApi = {
   health: async () => {
-    const res = await apiRequest<{ ok: boolean; service?: string }>('/health', {
+    const res = await apiRequest<{ ok: boolean; database?: boolean; service?: string }>('/health', {
       timeoutMs: 4500,
       skipAuth: true,
     });
-    const online = Boolean(res.ok && res.data?.ok === true);
+    const online = Boolean(res.ok && res.data?.ok === true && res.data?.database !== false);
     setApiOnlineStatus(online);
     return res;
   },

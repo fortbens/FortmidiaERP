@@ -12,6 +12,7 @@ SET time_zone = '-03:00';
 CREATE TABLE IF NOT EXISTS users (
   id VARCHAR(64) NOT NULL PRIMARY KEY,
   name VARCHAR(150) NOT NULL,
+  login_name VARCHAR(80) DEFAULT NULL UNIQUE,
   role VARCHAR(80) NOT NULL DEFAULT 'Executivo Comercial',
   hierarchy_level TINYINT UNSIGNED NOT NULL DEFAULT 4,
   department VARCHAR(120) NOT NULL DEFAULT 'Operações FortMídia',
@@ -267,6 +268,7 @@ CREATE TABLE IF NOT EXISTS app_state_snapshots (
 -- Caso você já tenha importado a versão anterior do schema.sql no phpMyAdmin,
 -- execute os ALTER TABLE abaixo sem perder nenhum dado existente:
 -- ============================================================================
+ALTER TABLE users ADD COLUMN IF NOT EXISTS login_name VARCHAR(80) DEFAULT NULL AFTER name;
 ALTER TABLE news_pautas ADD COLUMN IF NOT EXISTS internal_code VARCHAR(32) DEFAULT NULL AFTER id;
 ALTER TABLE news_pautas ADD COLUMN IF NOT EXISTS assigned_reporter_id VARCHAR(64) DEFAULT NULL AFTER reporter;
 

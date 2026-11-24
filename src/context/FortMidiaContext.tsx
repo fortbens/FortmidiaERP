@@ -1,11 +1,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
   ApiResult,
+  authApi,
   campaignsApi,
   citizenApi,
+  clearApiAuthToken,
   crmApi,
   financeApi,
-  getApiAuthToken,
+  hasApiSession,
   newsApi,
   stateApi,
   usersApi,
@@ -204,9 +206,14 @@ interface FortMidiaContextValue extends FortMidiaState {
   deleteOutdoorPoint: (id: string) => void;
 
   /* Equipe, Hierarquia & Permissões */
-  addTeamMember: (member: Omit<TeamMember, 'id' | 'createdAt'>) => void;
-  updateTeamMember: (id: string, patch: Partial<TeamMember>) => void;
-  deleteTeamMember: (id: string) => void;
+  addTeamMember: (
+    member: Omit<TeamMember, 'id' | 'createdAt'>
+  ) => Promise<{ ok: boolean; error?: string; savedInMysql?: boolean }>;
+  updateTeamMember: (
+    id: string,
+    patch: Partial<TeamMember>
+  ) => Promise<{ ok: boolean; error?: string; savedInMysql?: boolean }>;
+  deleteTeamMember: (id: string) => Promise<{ ok: boolean; error?: string }>;
   setActiveAdminUserId: (id: string) => void;
 
   /* Agenda Corporativa */
@@ -306,12 +313,16 @@ interface FortMidiaContextValue extends FortMidiaState {
   deleteSiteAdBanner: (id: string) => void;
   updateSiteAdsConfig: (patch: Partial<SiteAdsConfig>) => void;
 
-  /* Integração Real MySQL / PHP (/api) */
+  /* Integração Real MySQL / PHP (/api) & Permanência de Sessão */
   apiMode: 'checking' | 'online' | 'offline';
   apiSyncLoading: boolean;
   apiSyncError: string | null;
   apiSyncMessage: string | null;
   isDatabaseEmpty: boolean;
+  isAdminAuthenticated: boolean;
+  setIsAdminAuthenticated: (authenticated: boolean) => void;
+  adminSessionChecking: boolean;
+  logoutAdminSession: () => Promise<void>;
   clearApiFeedback: () => void;
   refreshFromMysql: (authenticatedUser?: Partial<TeamMember>) => Promise<boolean>;
   syncInitialDataToMysql: () => Promise<{ ok: boolean; summary: string }>;
@@ -545,6 +556,8 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [apiSyncError, setApiSyncError] = useState<string | null>(null);
   const [apiSyncMessage, setApiSyncMessage] = useState<string | null>(null);
   const [isDatabaseEmpty, setIsDatabaseEmpty] = useState(false);
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
+  const [adminSessionChecking, setAdminSessionChecking] = useState(true);
 
   const apiModeRef = useRef<'checking' | 'online' | 'offline'>('checking');
   apiModeRef.current = apiMode;
@@ -584,12 +597,12 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return;
       }
 
-      if (!skipAuth && !getApiAuthToken()) {
+      if (!skipAuth && !hasApiSession()) {
         if (mode === 'online') {
           onRollback?.();
           setApiSyncMessage(null);
           setApiSyncError(
-            `Não foi possível ${actionLabel}: sessão sem token de autenticação na API. Faça login novamente.`
+            `Não foi possível ${actionLabel}: sessão sem autenticação ativa na API. Faça login novamente.`
           );
         }
         return;
@@ -614,18 +627,34 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const refreshFromMysql = useCallback(
     async (authenticatedUser?: Partial<TeamMember>): Promise<boolean> => {
       const health = await stateApi.health();
-      const online = Boolean(health.ok && health.data?.ok === true);
+      const online = Boolean(health.ok && health.data?.ok === true && health.data?.database !== false);
       setApiMode(online ? 'online' : 'offline');
       apiModeRef.current = online ? 'online' : 'offline';
 
       if (!online) {
+        // Ambiente preview/offline sem backend PHP: restaura sessão apenas no preview se existir marcação
+        try {
+          const previewUid = sessionStorage.getItem('fortmidia_preview_admin_uid');
+          if (previewUid) {
+            setState((prev) =>
+              prev.teamMembers.some((m) => m.id === previewUid)
+                ? { ...prev, activeAdminUserId: previewUid }
+                : prev
+            );
+            setIsAdminAuthenticated(true);
+          }
+        } catch {
+          // Ignore storage restrictions
+        }
         hasHydratedFromApi.current = true;
+        setAdminSessionChecking(false);
         return false;
       }
 
       // API MySQL confirmada online: descarta cache local antigo para nunca sobrescrever o banco
       try {
         localStorage.removeItem(STORAGE_KEY);
+        sessionStorage.removeItem('fortmidia_preview_admin_uid');
       } catch {
         // Ignore storage restrictions
       }
@@ -634,9 +663,22 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setApiSyncError(null);
 
       try {
-        const hasToken = Boolean(getApiAuthToken());
+        // Se não há token em memória ainda (ex.: após F5 / refresh ou botão Voltar),
+        // valida automaticamente o cookie HttpOnly de sessão no servidor (/api/auth/me)
+        let resolvedAuthUser = authenticatedUser;
+        if (!hasApiSession()) {
+          const meRes = await authApi.me();
+          if (meRes.ok && meRes.data?.user) {
+            resolvedAuthUser = meRes.data.user;
+            setIsAdminAuthenticated(true);
+          }
+        } else {
+          setIsAdminAuthenticated(true);
+        }
 
-        if (!hasToken) {
+        const hasSession = hasApiSession();
+
+        if (!hasSession) {
           const [publicNewsRes, publicStateRes] = await Promise.all([
             newsApi.list(),
             stateApi.fetchPublicState<FortMidiaState>(),
@@ -676,6 +718,7 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           hasHydratedFromApi.current = true;
           return publicNewsRes.ok;
         }
+        authenticatedUser = resolvedAuthUser;
 
         const [
           contractsRes,
@@ -749,6 +792,8 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             ? hydrateTeamMembers(usersRes.data.items, false)
             : null;
 
+        const currentAuthUser = resolvedAuthUser;
+
         skipNextSnapshotSave.current = true;
         setState((prev) => {
           const snapshot =
@@ -760,49 +805,50 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               : snapshot?.teamMembers
                 ? hydrateTeamMembers(snapshot.teamMembers, false)
                 : [];
-          if (authenticatedUser?.id) {
+          if (currentAuthUser?.id) {
             const exists = resolvedMembers.some(
               (m) =>
-                m.id === authenticatedUser.id ||
-                (authenticatedUser.email &&
-                  m.email.toLowerCase() === authenticatedUser.email.toLowerCase())
+                m.id === currentAuthUser.id ||
+                (currentAuthUser.email &&
+                  m.email.toLowerCase() === currentAuthUser.email.toLowerCase())
             );
             if (!exists) {
               const preset =
-                ROLE_PRESETS[(authenticatedUser.role as TeamRole) || 'Super Admin / Diretoria'] ??
+                ROLE_PRESETS[(currentAuthUser.role as TeamRole) || 'Super Admin / Diretoria'] ??
                 ROLE_PRESETS['Super Admin / Diretoria'];
               const injected: TeamMember = {
-                id: authenticatedUser.id,
-                name: authenticatedUser.name || 'Super Admin',
-                role: (authenticatedUser.role as TeamRole) || 'Super Admin / Diretoria',
-                hierarchyLevel: authenticatedUser.hierarchyLevel ?? preset.hierarchyLevel,
-                department: authenticatedUser.department || 'Diretoria Executiva',
-                email: authenticatedUser.email || '',
-                phone: authenticatedUser.phone || '(11) 95779-2424',
+                id: currentAuthUser.id,
+                name: currentAuthUser.name || 'Super Admin',
+                loginName: currentAuthUser.loginName,
+                role: (currentAuthUser.role as TeamRole) || 'Super Admin / Diretoria',
+                hierarchyLevel: currentAuthUser.hierarchyLevel ?? preset.hierarchyLevel,
+                department: currentAuthUser.department || 'Diretoria Executiva',
+                email: currentAuthUser.email || '',
+                phone: currentAuthUser.phone || '(11) 95779-2424',
                 password: '',
                 avatarUrl:
-                  authenticatedUser.avatarUrl || '/assets/aistudio/Logo_FortM_dia_ded2b7d7.png',
-                bio: authenticatedUser.bio || '',
-                active: authenticatedUser.active ?? true,
+                  currentAuthUser.avatarUrl || '/assets/aistudio/Logo_FortM_dia_ded2b7d7.png',
+                bio: currentAuthUser.bio || '',
+                active: currentAuthUser.active ?? true,
                 createdAt:
-                  authenticatedUser.createdAt || new Date().toLocaleDateString('pt-BR'),
+                  currentAuthUser.createdAt || new Date().toLocaleDateString('pt-BR'),
                 allowedModules:
-                  authenticatedUser.allowedModules && authenticatedUser.allowedModules.length > 0
-                    ? authenticatedUser.allowedModules
+                  currentAuthUser.allowedModules && currentAuthUser.allowedModules.length > 0
+                    ? currentAuthUser.allowedModules
                     : [...preset.allowedModules],
-                permissions: authenticatedUser.permissions ?? { ...preset.permissions },
-                linkedClientName: authenticatedUser.linkedClientName,
+                permissions: currentAuthUser.permissions ?? { ...preset.permissions },
+                linkedClientName: currentAuthUser.linkedClientName,
               };
               resolvedMembers = [injected, ...resolvedMembers];
             }
           }
 
-          const matchedActiveId = authenticatedUser?.id
+          const matchedActiveId = currentAuthUser?.id
             ? (resolvedMembers.find(
                 (m) =>
-                  m.id === authenticatedUser.id ||
-                  (authenticatedUser.email &&
-                    m.email.toLowerCase() === authenticatedUser.email.toLowerCase())
+                  m.id === currentAuthUser.id ||
+                  (currentAuthUser.email &&
+                    m.email.toLowerCase() === currentAuthUser.email.toLowerCase())
               )?.id ?? prev.activeAdminUserId)
             : resolvedMembers.some((m) => m.id === prev.activeAdminUserId)
               ? prev.activeAdminUserId
@@ -856,17 +902,35 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return errors.length === 0;
       } finally {
         setApiSyncLoading(false);
+        setAdminSessionChecking(false);
       }
     },
     []
   );
+
+  const logoutAdminSession = useCallback(async () => {
+    try {
+      await authApi.logout();
+    } catch {
+      // Ignore network errors on logout
+    } finally {
+      clearApiAuthToken();
+      try {
+        sessionStorage.removeItem('fortmidia_preview_admin_uid');
+      } catch {
+        // Ignore storage restrictions
+      }
+      clearApiFeedback();
+      setIsAdminAuthenticated(false);
+    }
+  }, [clearApiFeedback]);
 
   const syncInitialDataToMysql = useCallback(async (): Promise<{
     ok: boolean;
     summary: string;
   }> => {
     const health = await stateApi.health();
-    const online = Boolean(health.ok && health.data?.ok === true);
+    const online = Boolean(health.ok && health.data?.ok === true && health.data?.database !== false);
     setApiMode(online ? 'online' : 'offline');
     apiModeRef.current = online ? 'online' : 'offline';
 
@@ -876,7 +940,7 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return { ok: false, summary: msg };
     }
 
-    if (!getApiAuthToken()) {
+    if (!hasApiSession()) {
       const msg = 'Faça login com um usuário administrador autenticado na API para sincronizar o MySQL.';
       setApiSyncError(msg);
       return { ok: false, summary: msg };
@@ -1012,7 +1076,7 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return;
     }
 
-    if (!hasHydratedFromApi.current || apiMode !== 'online' || !getApiAuthToken()) {
+    if (!hasHydratedFromApi.current || apiMode !== 'online' || !hasApiSession()) {
       return;
     }
 
@@ -1234,7 +1298,7 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       ...prev,
       leads: [newLead, ...prev.leads],
     }));
-    runApiMutation('salvar lead comercial', () => crmApi.createLead(newLead, Boolean(getApiAuthToken())), {
+    runApiMutation('salvar lead comercial', () => crmApi.createLead(newLead, hasApiSession()), {
       skipAuth: true,
       onRollback: () => setState((prev) => ({ ...prev, leads: prevLeads })),
       onSuccess: () => setIsDatabaseEmpty(false),
@@ -1823,37 +1887,141 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     });
   };
 
-  /* Equipe & Pessoas */
-  const addTeamMember = (member: Omit<TeamMember, 'id' | 'createdAt'>) => {
+  /* Equipe & Pessoas (persistência forçada na tabela `users` do MySQL) */
+  const addTeamMember = async (
+    member: Omit<TeamMember, 'id' | 'createdAt'>
+  ): Promise<{ ok: boolean; error?: string; savedInMysql?: boolean }> => {
     const newMember: TeamMember = {
       ...member,
       id: `usr-${Date.now()}`,
       createdAt: new Date().toLocaleDateString('pt-BR'),
     };
-    const prevMembers = stateRef.current.teamMembers;
+
+    if (apiModeRef.current === 'offline') {
+      setState((prev) => ({
+        ...prev,
+        teamMembers: [newMember, ...prev.teamMembers],
+      }));
+      return { ok: true, savedInMysql: false };
+    }
+
+    if (!hasApiSession()) {
+      const error = 'Sessão sem autenticação ativa na API. Faça login novamente para gravar em usuários.';
+      setApiSyncError(error);
+      return { ok: false, error };
+    }
+
+    const res = await usersApi.create(newMember);
+    if (!res.ok) {
+      reportApiError('criar usuário na tabela users', res);
+      return { ok: false, error: res.error || 'Falha ao gravar usuário na tabela users do MySQL.' };
+    }
+
+    const savedMember: TeamMember = res.data?.item
+      ? { ...newMember, ...res.data.item, password: '' }
+      : { ...newMember, password: '' };
+
     setState((prev) => ({
       ...prev,
-      teamMembers: [newMember, ...prev.teamMembers],
+      teamMembers: [savedMember, ...prev.teamMembers.filter((m) => m.id !== savedMember.id)],
     }));
-    runApiMutation('criar usuário', () => usersApi.create(newMember), {
-      onRollback: () => setState((prev) => ({ ...prev, teamMembers: prevMembers })),
-    });
+    setApiSyncError(null);
+    return { ok: true, savedInMysql: true };
   };
 
-  const updateTeamMember = (id: string, patch: Partial<TeamMember>) => {
+  const updateTeamMember = async (
+    id: string,
+    patch: Partial<TeamMember>
+  ): Promise<{ ok: boolean; error?: string; savedInMysql?: boolean }> => {
     const prevMembers = stateRef.current.teamMembers;
+    const existing = prevMembers.find((m) => m.id === id);
+
+    // Monta payload completo para garantir persistência/upsert na tabela `users` do MySQL,
+    // enviando `password` apenas quando explicitamente preenchida pelo Super Admin.
+    const cleanPatch: Partial<TeamMember> = { ...patch };
+    if (typeof cleanPatch.password === 'string' && !cleanPatch.password.trim()) {
+      delete cleanPatch.password;
+    }
+
+    const apiPayload: Partial<TeamMember> = existing
+      ? {
+          name: existing.name,
+          loginName: existing.loginName,
+          role: existing.role,
+          hierarchyLevel: existing.hierarchyLevel,
+          department: existing.department,
+          email: existing.email,
+          phone: existing.phone,
+          avatarUrl: existing.avatarUrl,
+          bio: existing.bio,
+          active: existing.active,
+          allowedModules: existing.allowedModules,
+          permissions: existing.permissions,
+          linkedClientName: existing.linkedClientName,
+          ...cleanPatch,
+        }
+      : cleanPatch;
+
+    if (apiModeRef.current === 'offline') {
+      setState((prev) => ({
+        ...prev,
+        teamMembers: prev.teamMembers.map((m) => (m.id === id ? { ...m, ...cleanPatch } : m)),
+      }));
+      return { ok: true, savedInMysql: false };
+    }
+
+    if (!hasApiSession()) {
+      const error = 'Sessão sem autenticação ativa na API. Faça login novamente para salvar em usuários.';
+      setApiSyncError(error);
+      return { ok: false, error };
+    }
+
+    const res = await usersApi.update(id, apiPayload);
+    if (!res.ok) {
+      reportApiError('atualizar credenciais do usuário', res);
+      return { ok: false, error: res.error || 'Falha ao salvar alterações na tabela users do MySQL.' };
+    }
+
     setState((prev) => ({
       ...prev,
-      teamMembers: prev.teamMembers.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+      teamMembers: prev.teamMembers.map((m) => {
+        if (m.id !== id) return m;
+        const merged = res.data?.item ? { ...m, ...cleanPatch, ...res.data.item } : { ...m, ...cleanPatch };
+        return { ...merged, password: '' };
+      }),
     }));
-    runApiMutation('atualizar usuário', () => usersApi.update(id, patch), {
-      onRollback: () => setState((prev) => ({ ...prev, teamMembers: prevMembers })),
-    });
+    setApiSyncError(null);
+    return { ok: true, savedInMysql: true };
   };
 
-  const deleteTeamMember = (id: string) => {
+  const deleteTeamMember = async (id: string): Promise<{ ok: boolean; error?: string }> => {
     const prevMembers = stateRef.current.teamMembers;
     const prevActive = stateRef.current.activeAdminUserId;
+
+    if (apiModeRef.current === 'offline') {
+      setState((prev) => ({
+        ...prev,
+        teamMembers: prev.teamMembers.filter((m) => m.id !== id),
+        activeAdminUserId:
+          prev.activeAdminUserId === id
+            ? (prev.teamMembers.find((m) => m.id !== id)?.id ?? '')
+            : prev.activeAdminUserId,
+      }));
+      return { ok: true };
+    }
+
+    if (!hasApiSession()) {
+      const error = 'Sessão sem autenticação ativa na API. Faça login novamente.';
+      setApiSyncError(error);
+      return { ok: false, error };
+    }
+
+    const res = await usersApi.remove(id);
+    if (!res.ok) {
+      reportApiError('excluir usuário', res);
+      return { ok: false, error: res.error || 'Falha ao excluir usuário no MySQL.' };
+    }
+
     setState((prev) => ({
       ...prev,
       teamMembers: prev.teamMembers.filter((m) => m.id !== id),
@@ -1862,14 +2030,10 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           ? (prev.teamMembers.find((m) => m.id !== id)?.id ?? '')
           : prev.activeAdminUserId,
     }));
-    runApiMutation('excluir usuário', () => usersApi.remove(id), {
-      onRollback: () =>
-        setState((prev) => ({
-          ...prev,
-          teamMembers: prevMembers,
-          activeAdminUserId: prevActive,
-        })),
-    });
+    setApiSyncError(null);
+    void prevMembers;
+    void prevActive;
+    return { ok: true };
   };
 
   const setActiveAdminUserId = (id: string) => {
@@ -2779,13 +2943,21 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       );
       if (existingMember) {
         linkedUserId = existingMember.id;
-      } else if (loginPassword && loginPassword.trim().length >= 6) {
+      } else if (isCurrentUserSuperAdmin() && loginPassword && loginPassword.trim().length >= 6) {
         const newUserId = `usr-${Date.now()}`;
         linkedUserId = newUserId;
         const preset = ROLE_PRESETS['Repórter / Jornalista'];
+        const firstWord = payload.name
+          .trim()
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .split(/\s+/)[0]
+          ?.replace(/[^a-z0-9._-]+/g, '');
         createdMember = {
           id: newUserId,
           name: payload.name.trim(),
+          loginName: firstWord || undefined,
           role: 'Repórter / Jornalista',
           hierarchyLevel: preset.hierarchyLevel,
           department: `Reportagem · ${payload.city}`,
@@ -3142,6 +3314,10 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         apiSyncError,
         apiSyncMessage,
         isDatabaseEmpty,
+        isAdminAuthenticated,
+        setIsAdminAuthenticated,
+        adminSessionChecking,
+        logoutAdminSession,
         clearApiFeedback,
         refreshFromMysql,
         syncInitialDataToMysql,

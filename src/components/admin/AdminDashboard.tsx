@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -112,17 +112,173 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     apiSyncError,
     apiSyncMessage,
     isDatabaseEmpty,
+    isAdminAuthenticated,
+    setIsAdminAuthenticated,
+    adminSessionChecking,
+    logoutAdminSession,
     clearApiFeedback,
     refreshFromMysql,
     syncInitialDataToMysql,
     resetDemoData,
   } = useFortMidia();
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<AdminTabId>('cockpit');
+  const readTabFromUrl = (): AdminTabId => {
+    if (typeof window === 'undefined') return 'cockpit';
+    try {
+      const searchTab = new URLSearchParams(window.location.search).get('tab');
+      if (searchTab && ALL_ADMIN_TABS.includes(searchTab as AdminTabId)) {
+        return searchTab as AdminTabId;
+      }
+      const hashQuery = window.location.hash.split('?')[1];
+      if (hashQuery) {
+        const hashTab = new URLSearchParams(hashQuery).get('tab');
+        if (hashTab && ALL_ADMIN_TABS.includes(hashTab as AdminTabId)) {
+          return hashTab as AdminTabId;
+        }
+      }
+    } catch {
+      // Ignore malformed query
+    }
+    return 'cockpit';
+  };
+
+  const [activeTab, setActiveTabState] = useState<AdminTabId>(readTabFromUrl);
+  const activeTabRef = useRef<AdminTabId>(activeTab);
+  const tabHistoryRef = useRef<AdminTabId[]>([activeTab]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [studioPautaId, setStudioPautaId] = useState<string | null>(null);
   const [copiedDirectUrl, setCopiedDirectUrl] = useState(false);
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  const buildAdminUrlForTab = useCallback((tab: AdminTabId): string => {
+    if (typeof window === 'undefined') return `/crm?tab=${tab}`;
+    const hasHashAdmin = /^#\/(admin|crm|sistema|dashboard|painel)/i.test(window.location.hash);
+    if (hasHashAdmin) {
+      const baseHash = window.location.hash.split('?')[0] || '#/crm';
+      return `${window.location.pathname}${window.location.search}${baseHash}?tab=${tab}`;
+    }
+    const cleanPath =
+      /^\/(admin|crm|sistema|dashboard|painel)/i.test(window.location.pathname)
+        ? window.location.pathname
+        : '/crm';
+    return `${cleanPath}?tab=${tab}`;
+  }, []);
+
+  const setActiveTab = useCallback(
+    (nextTab: AdminTabId, pushHistory = true) => {
+      setActiveTabState((prev) => {
+        if (prev === nextTab) return prev;
+        activeTabRef.current = nextTab;
+        if (pushHistory) {
+          tabHistoryRef.current = [...tabHistoryRef.current.slice(-20), nextTab];
+          try {
+            window.history.pushState(
+              { fortAdminGuard: true, tab: nextTab },
+              '',
+              buildAdminUrlForTab(nextTab)
+            );
+          } catch {
+            // Ignore restricted history APIs
+          }
+        }
+        return nextTab;
+      });
+    },
+    [buildAdminUrlForTab]
+  );
+
+  // Força permanência no painel ao clicar em "Voltar" ou fazer gesto voltar (Desktop e Mobile)
+  useEffect(() => {
+    if (!isAdminAuthenticated || typeof window === 'undefined') return;
+
+    const initialTab = activeTabRef.current || readTabFromUrl();
+    try {
+      // Cria âncora + camada superior para interceptar o botão Voltar sem sair nem deslogar
+      if (!window.history.state?.fortAdminGuard || window.history.state?.anchor) {
+        window.history.replaceState(
+          { fortAdminGuard: true, tab: initialTab, anchor: true },
+          '',
+          buildAdminUrlForTab(initialTab)
+        );
+        window.history.pushState(
+          { fortAdminGuard: true, tab: initialTab },
+          '',
+          buildAdminUrlForTab(initialTab)
+        );
+      }
+    } catch {
+      // Ignore restricted history APIs
+    }
+
+    const handlePopState = (event: PopStateEvent) => {
+      const st = event.state as {
+        fortAdminGuard?: boolean;
+        tab?: AdminTabId;
+        anchor?: boolean;
+      } | null;
+
+      // Ao atingir o estado âncora (primeiro nível do painel), re-empurra a guarda para
+      // que múltiplos cliques/gestos em "Voltar" nunca derrubem o usuário para o login/portal.
+      if (st?.fortAdminGuard && st.anchor) {
+        const stayTab =
+          st.tab && ALL_ADMIN_TABS.includes(st.tab) ? st.tab : activeTabRef.current || 'cockpit';
+        setActiveTabState(stayTab);
+        activeTabRef.current = stayTab;
+        try {
+          window.history.pushState(
+            { fortAdminGuard: true, tab: stayTab },
+            '',
+            buildAdminUrlForTab(stayTab)
+          );
+        } catch {
+          // Ignore
+        }
+        return;
+      }
+
+      if (st?.fortAdminGuard && st.tab && ALL_ADMIN_TABS.includes(st.tab)) {
+        setActiveTabState(st.tab);
+        activeTabRef.current = st.tab;
+        return;
+      }
+
+      // Se houver aba anterior no histórico interno do painel, retorna para ela
+      if (tabHistoryRef.current.length > 1) {
+        tabHistoryRef.current.pop();
+        const prevTab = tabHistoryRef.current[tabHistoryRef.current.length - 1] || 'cockpit';
+        setActiveTabState(prevTab);
+        activeTabRef.current = prevTab;
+        try {
+          window.history.pushState(
+            { fortAdminGuard: true, tab: prevTab },
+            '',
+            buildAdminUrlForTab(prevTab)
+          );
+        } catch {
+          // Ignore
+        }
+        return;
+      }
+
+      // Mesmo sem estado anterior, mantém o operador autenticado dentro do painel
+      const current = activeTabRef.current || 'cockpit';
+      try {
+        window.history.pushState(
+          { fortAdminGuard: true, tab: current },
+          '',
+          buildAdminUrlForTab(current)
+        );
+      } catch {
+        // Ignore
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [isAdminAuthenticated, buildAdminUrlForTab]);
 
   const directSystemUrl =
     typeof window !== 'undefined'
@@ -197,11 +353,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     ? activeTab
     : allowedTabIds[0] || 'clientes';
 
+  const normalizeSimpleLogin = (value: string) =>
+    value
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
   const handleAuthenticate = async (
     rawUsername: string,
     rawPassword: string
   ): Promise<string | null> => {
-    const normalizedUser = rawUsername.trim().toLowerCase();
+    const normalizedUser = normalizeSimpleLogin(rawUsername);
     const password = rawPassword.trim();
     if (!normalizedUser || !password) {
       return 'Informe usuário e senha para continuar.';
@@ -211,16 +374,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     let isApiOnline = apiMode === 'online';
     if (apiMode === 'checking') {
       const health = await stateApi.health();
-      isApiOnline = Boolean(health.ok && health.data?.ok === true);
+      isApiOnline = Boolean(health.ok && health.data?.ok === true && health.data?.database !== false);
     }
 
-    // 1. Autenticação real na API REST (PHP/MySQL em produção)
+    // 1. Autenticação real na API REST (PHP/MySQL em produção — grava cookie HttpOnly + token em memória)
     const apiLogin = await authApi.login(rawUsername.trim(), password);
     if (apiLogin.ok && apiLogin.data?.user) {
       const apiUser = apiLogin.data.user;
       setActiveAdminUserId(apiUser.id);
       await refreshFromMysql(apiUser);
-      setIsAuthenticated(true);
+      setIsAdminAuthenticated(true);
       return null;
     }
 
@@ -232,11 +395,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     // 2. Fallback automático apenas em ambiente offline/preview sem backend PHP disponível
     const matchedMember = teamMembers.find((m) => {
-      const email = m.email.toLowerCase();
+      const email = normalizeSimpleLogin(m.email);
       const emailPrefix = email.split('@')[0];
-      const name = m.name.toLowerCase();
+      const loginName = normalizeSimpleLogin(m.loginName || '');
+      const name = normalizeSimpleLogin(m.name);
       const firstName = name.split(' ')[0];
       if (
+        (loginName && normalizedUser === loginName) ||
         normalizedUser === email ||
         normalizedUser === emailPrefix ||
         normalizedUser === name ||
@@ -268,11 +433,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
 
     setActiveAdminUserId(matchedMember.id);
-    setIsAuthenticated(true);
+    try {
+      sessionStorage.setItem('fortmidia_preview_admin_uid', matchedMember.id);
+    } catch {
+      // Ignore storage restrictions
+    }
+    setIsAdminAuthenticated(true);
     return null;
   };
 
-  if (!isAuthenticated) {
+  if (adminSessionChecking && !isAdminAuthenticated) {
+    return (
+      <div className="min-h-screen bg-[#09090B] text-zinc-200 flex flex-col items-center justify-center gap-3 px-4">
+        <RefreshCw className="h-6 w-6 animate-spin text-[#fa6607]" aria-hidden="true" />
+        <p className="text-xs text-zinc-400">Restaurando sessão administrativa...</p>
+      </div>
+    );
+  }
+
+  if (!isAdminAuthenticated) {
     return (
       <AdminLoginPage
         logoUrl={siteSettings.logoUrl || OFFICIAL_FORTMIDIA_LOGO_URL}
@@ -542,9 +721,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <button
               type="button"
               onClick={() => {
-                void authApi.logout();
-                clearApiFeedback();
-                setIsAuthenticated(false);
+                void logoutAdminSession();
               }}
               className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5 cursor-pointer"
             >

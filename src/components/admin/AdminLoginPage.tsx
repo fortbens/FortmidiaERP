@@ -65,7 +65,7 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
               htmlFor="admin-login-username"
               className="block text-xs font-medium text-zinc-300 mb-1.5"
             >
-              Usuário
+              Usuário (nome simples ou e-mail)
             </label>
             <input
               id="admin-login-username"
@@ -74,7 +74,7 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
-              placeholder="Digite seu usuário"
+              placeholder="Ex.: emerson ou nome@fortmidia.com.br"
               value={username}
               onChange={(e) => {
                 setUsername(e.target.value);
