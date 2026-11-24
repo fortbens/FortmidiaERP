@@ -21,6 +21,22 @@ import { AdminDashboard } from './components/admin/AdminDashboard';
 
 type AppRouteView = 'public' | 'fortnews' | 'cliente' | 'apresentacao' | 'admin';
 type DomainContext = 'fortnews' | 'fortmidia' | 'preview';
+type PublicTheme = 'dark' | 'light';
+
+const PUBLIC_THEME_STORAGE_KEY = 'fortmidia_public_theme';
+
+function readStoredPublicTheme(): PublicTheme {
+  if (typeof window === 'undefined') return 'dark';
+  try {
+    const saved = window.localStorage.getItem(PUBLIC_THEME_STORAGE_KEY);
+    if (saved === 'light' || saved === 'dark') {
+      return saved;
+    }
+  } catch {
+    // Ignore storage access restrictions
+  }
+  return 'dark';
+}
 
 function detectDomainContext(): DomainContext {
   if (typeof window === 'undefined') return 'preview';
@@ -91,8 +107,25 @@ export default function App() {
   const [proposalOpen, setProposalOpen] = useState(false);
   const [selectedQuota, setSelectedQuota] = useState('Cota Master FortNews Podcast');
   const [mapsQuotaExceeded, setMapsQuotaExceeded] = useState(false);
+  const [publicTheme, setPublicTheme] = useState<PublicTheme>(readStoredPublicTheme);
 
   const isPreviewOrLocal = domainContext === 'preview';
+
+  const togglePublicTheme = () => {
+    setPublicTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PUBLIC_THEME_STORAGE_KEY, publicTheme);
+    } catch {
+      // Ignore storage quota/privacy restrictions
+    }
+    const root = document.documentElement;
+    const useDarkClass = view !== 'public' || publicTheme === 'dark';
+    root.classList.toggle('dark', useDarkClass);
+    root.setAttribute('data-public-theme', publicTheme);
+  }, [publicTheme, view]);
 
   useEffect(() => {
     const titleByView: Record<AppRouteView, string> = {
@@ -243,12 +276,18 @@ export default function App() {
         />
       ) : (
         <div
-          className="min-h-screen text-[#F5F5F7]"
-          style={{ backgroundColor: 'var(--fort-bg)' }}
+          className={`min-h-screen transition-colors duration-200 ${
+            publicTheme === 'light'
+              ? 'public-theme-light bg-[#F8F9FB] text-zinc-900'
+              : 'text-[#F5F5F7]'
+          }`}
+          style={publicTheme === 'dark' ? { backgroundColor: 'var(--fort-bg)' } : undefined}
         >
           <Navbar
             onOpenProposal={handleOpenProposal}
             onOpenFortNews={navigateToFortNews}
+            theme={publicTheme}
+            onToggleTheme={togglePublicTheme}
           />
           <main>
             <HeroSection

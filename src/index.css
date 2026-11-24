@@ -49,6 +49,106 @@
   -webkit-backdrop-filter: blur(14px);
 }
 
+/* Public Portal Light Theme overrides (scoped strictly to .public-theme-light) */
+.public-theme-light {
+  background-color: #f8f9fb;
+  color: #0f172a;
+}
+
+.public-theme-light .glass-surface {
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.public-theme-light [class*="bg-[#08080A]"],
+.public-theme-light [class*="bg-[#0A0A0A]"],
+.public-theme-light [class*="bg-[#0D0D0F]"],
+.public-theme-light [class*="bg-[#0E0E10]"],
+.public-theme-light [class*="bg-[#0F0F11]"],
+.public-theme-light .bg-zinc-950 {
+  background-color: #f1f5f9 !important;
+}
+
+.public-theme-light [class*="bg-[#111114]"],
+.public-theme-light [class*="bg-[#121214]"],
+.public-theme-light [class*="bg-[#121215]"],
+.public-theme-light [class*="bg-[#141416]"],
+.public-theme-light [class*="bg-[#16161A]"],
+.public-theme-light [class*="bg-[#16161B]"],
+.public-theme-light [class*="bg-[#18181C]"],
+.public-theme-light [class*="bg-[#1C1C21]"],
+.public-theme-light .bg-zinc-900 {
+  background-color: #ffffff !important;
+}
+
+.public-theme-light [class*="bg-white/[0.03]"],
+.public-theme-light [class*="bg-white/[0.04]"],
+.public-theme-light [class*="bg-white/[0.08]"] {
+  background-color: rgba(15, 23, 42, 0.04) !important;
+}
+
+.public-theme-light [class*="border-white/10"],
+.public-theme-light [class*="border-white/15"],
+.public-theme-light [class*="border-white/20"],
+.public-theme-light [class*="border-white/25"] {
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+.public-theme-light .text-white:not(
+  [style*="background-color"],
+  [class*="bg-[#fa6607]"],
+  [class*="bg-[#FF6600]"],
+  [class*="bg-[#FF5500]"],
+  [class*="bg-[#e55a00]"],
+  [class*="bg-[#25D366]"],
+  [class*="bg-emerald-"],
+  [class*="bg-red-"],
+  [class*="bg-black"]
+) {
+  color: #0f172a;
+}
+
+.public-theme-light [style*="background-color"] .text-white,
+.public-theme-light [class*="bg-[#fa6607]"] .text-white,
+.public-theme-light [class*="bg-[#FF6600]"] .text-white,
+.public-theme-light [class*="bg-[#25D366]"] .text-white,
+.public-theme-light [class*="bg-black/"] .text-white,
+.public-theme-light [class*="bg-gradient-to-t"] .text-white,
+.public-theme-light [class*="bg-black/"] .text-zinc-200,
+.public-theme-light [class*="bg-gradient-to-t"] .text-zinc-200,
+.public-theme-light [class*="bg-gradient-to-t"] .text-zinc-300 {
+  color: #ffffff !important;
+}
+
+.public-theme-light .text-zinc-100,
+.public-theme-light .text-zinc-200 {
+  color: #1e293b;
+}
+
+.public-theme-light .text-zinc-300 {
+  color: #334155;
+}
+
+.public-theme-light .text-zinc-400 {
+  color: #475569;
+}
+
+.public-theme-light .text-zinc-500 {
+  color: #64748b;
+}
+
+.public-theme-light input,
+.public-theme-light textarea,
+.public-theme-light select {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+.public-theme-light input::placeholder,
+.public-theme-light textarea::placeholder {
+  color: #64748b !important;
+}
+
 /* High-visibility scrollbars for tables, pipeline, and floating scroll rails */
 * {
   scrollbar-width: auto;

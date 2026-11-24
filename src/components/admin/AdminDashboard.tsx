@@ -585,154 +585,164 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 print-container-reset">
         {/* Top Bar with Breadcrumb & Active Operator Profile */}
-        <header className="no-print sticky top-0 z-40 flex h-16 items-center justify-between gap-2 sm:gap-4 border-b border-white/10 bg-[#0A0A0A]/95 px-3 sm:px-6 lg:px-8 backdrop-blur-md">
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen((prev) => !prev)}
-              aria-label="Alternar menu administrativo"
-              aria-expanded={mobileMenuOpen}
-              className={`lg:hidden inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition-colors cursor-pointer ${
-                mobileMenuOpen
-                  ? 'border-[#fa6607] bg-[#fa6607] text-white'
-                  : 'border-white/15 bg-[#121215] text-zinc-200 hover:border-[#fa6607]/70'
-              }`}
-            >
-              {mobileMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
-            </button>
-            <FortMidiaLogo
-              src={siteSettings.logoUrl || OFFICIAL_FORTMIDIA_LOGO_URL}
-              alt="CRM FORTMIDIA"
-              className="lg:hidden h-9"
-              rounded="md"
-            />
-            <div className="truncate text-xs text-zinc-400">
-              <span className="hidden lg:inline font-semibold text-white">CRM FORTMIDIA</span>
-              <span className="hidden lg:inline mx-2 text-zinc-600">/</span>
-              <span className="text-zinc-200 font-medium">{currentTabLabel}</span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {/* Indicador discreto do status real de conexão com a API PHP/MySQL */}
-            <button
-              type="button"
-              disabled={apiSyncLoading}
-              onClick={() => void refreshFromMysql()}
-              title={
-                apiSyncError
-                  ? `Erro de API: ${apiSyncError}`
-                  : apiMode === 'online'
-                    ? 'Banco MySQL Online (/api/health ok). Clique para recarregar.'
-                    : apiMode === 'checking'
-                      ? 'Verificando conexão com /api/health...'
-                      : 'API PHP /api/health indisponível neste ambiente.'
-              }
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                apiSyncError || apiMode === 'offline'
-                  ? 'border-red-500/40 bg-red-950/50 text-red-200 hover:bg-red-950/70'
-                  : apiMode === 'online'
-                    ? 'border-emerald-500/35 bg-emerald-950/40 text-emerald-300 hover:bg-emerald-950/60'
-                    : 'border-white/15 bg-[#121215] text-zinc-400'
-              }`}
-            >
-              <span
-                className={`h-2 w-2 rounded-full shrink-0 ${
-                  apiSyncError || apiMode === 'offline'
-                    ? 'bg-red-500'
-                    : apiMode === 'online'
-                      ? 'bg-emerald-400'
-                      : 'bg-zinc-500 animate-pulse'
-                }`}
-                aria-hidden="true"
-              />
-              <span>
-                {apiSyncError || apiMode === 'offline'
-                  ? 'Erro de API'
-                  : apiMode === 'online'
-                    ? 'MySQL Conectado'
-                    : 'Verificando MySQL...'}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleCopyDirectUrl}
-              title={`Copiar link direto do sistema: ${directSystemUrl}`}
-              className="hidden md:inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#121215] px-2.5 py-1.5 text-[11px] font-medium text-zinc-200 hover:border-[#fa6607]/60 hover:text-white whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              {copiedDirectUrl ? (
-                <>
-                  <Check className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
-                  <span className="text-emerald-300">URL Copiada</span>
-                </>
-              ) : (
-                <>
-                  <Link2 className="h-3.5 w-3.5 text-[#fa6607]" aria-hidden="true" />
-                  <span>URL Direta /sistema</span>
-                </>
-              )}
-            </button>
-            {allowedTabIds.includes('notificacoes') && (
+        <header className="no-print sticky top-0 z-40 flex flex-col gap-2 border-b border-white/10 bg-[#0A0A0A]/95 px-3 py-2.5 backdrop-blur-md md:h-16 md:flex-row md:items-center md:justify-between md:gap-4 md:px-6 md:py-0 lg:px-8">
+          {/* Row 1 (mobile) / Left zone (desktop): Menu, Logo & Page Title */}
+          <div className="flex items-center justify-between gap-2.5 sm:gap-3 min-w-0 md:flex-1 md:justify-start">
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
               <button
                 type="button"
-                onClick={() => setActiveTab('notificacoes')}
-                aria-label="Abrir central de notificações"
-                title="Central de Notificações"
-                className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 bg-[#121215] text-zinc-200 hover:border-[#fa6607]/60 hover:text-white cursor-pointer"
+                onClick={() => setMobileMenuOpen((prev) => !prev)}
+                aria-label="Alternar menu administrativo"
+                aria-expanded={mobileMenuOpen}
+                className={`lg:hidden inline-flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center rounded-lg border transition-colors cursor-pointer ${
+                  mobileMenuOpen
+                    ? 'border-[#fa6607] bg-[#fa6607] text-white'
+                    : 'border-white/15 bg-[#121215] text-zinc-200 hover:border-[#fa6607]/70'
+                }`}
               >
-                <Bell className="h-4 w-4" aria-hidden="true" />
-                {unreadNotificationsCount > 0 && (
-                  <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#fa6607] px-1 font-mono text-[10px] font-bold text-white tabular-nums">
-                    {unreadNotificationsCount}
-                  </span>
-                )}
+                {mobileMenuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
               </button>
-            )}
-            {activeOperator && (
+              <FortMidiaLogo
+                src={siteSettings.logoUrl || OFFICIAL_FORTMIDIA_LOGO_URL}
+                alt="CRM FORTMIDIA"
+                className="lg:hidden h-8 sm:h-9 shrink-0"
+                rounded="md"
+              />
+              <div className="min-w-0 flex-1 truncate text-xs sm:text-sm text-zinc-400">
+                <span className="hidden lg:inline font-semibold text-white">CRM FORTMIDIA</span>
+                <span className="hidden lg:inline mx-2 text-zinc-600">/</span>
+                <span className="text-zinc-100 font-semibold truncate">{currentTabLabel}</span>
+              </div>
+            </div>
+
+            {/* Mobile-only quick exit buttons kept aligned on Row 1 right */}
+            <div className="flex items-center gap-1.5 shrink-0 md:hidden">
+              <button
+                type="button"
+                onClick={onBackToPortal}
+                className="rounded-lg border border-white/15 px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-white/5 cursor-pointer"
+              >
+                Portal
+              </button>
               <button
                 type="button"
                 onClick={() => {
-                  if (allowedTabIds.includes('equipe')) setActiveTab('equipe');
+                  void logoutAdminSession();
                 }}
-                className="hidden sm:flex items-center gap-2.5 rounded-lg px-2 py-1 text-right hover:bg-white/[0.04] cursor-pointer"
-                title="Perfil do operador ativo"
+                className="rounded-lg border border-white/15 px-2.5 py-1.5 text-[11px] text-zinc-300 hover:bg-white/5 cursor-pointer"
               >
-                <div>
-                  <div className="text-xs font-medium text-white">{activeOperator.name}</div>
-                  <div className="text-[11px] text-zinc-400">
-                    Nível {activeOperator.hierarchyLevel} · {activeOperator.role}
-                  </div>
-                </div>
-                <MediaFrame
-                  src={activeOperator.avatarUrl}
-                  alt={activeOperator.name}
-                  className="h-9 w-9 rounded-full object-cover border border-[#fa6607]/40 bg-black"
-                />
+                Sair
               </button>
-            )}
-            <button
-              type="button"
-              onClick={onBackToPortal}
-              className="lg:hidden rounded-lg border border-white/15 px-3 py-1.5 text-xs font-medium text-white"
-            >
-              Portal
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                void logoutAdminSession();
-              }}
-              className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5 cursor-pointer"
-            >
-              Sair
-            </button>
+            </div>
+          </div>
+
+          {/* Row 2 (mobile < 768px) / Right zone (desktop >= 768px): Status (errors only), Direct URL, Notifications & Profile */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-2 md:flex-nowrap md:justify-end md:border-t-0 md:pt-0 md:gap-2.5 lg:gap-3 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
+              {/* Indicador de conexão exibido SOMENTE quando houver erro de API ou falha de sincronização */}
+              {(apiSyncError || apiMode === 'offline') && (
+                <button
+                  type="button"
+                  disabled={apiSyncLoading}
+                  onClick={() => void refreshFromMysql()}
+                  title={
+                    apiSyncError
+                      ? `Erro de API: ${apiSyncError}`
+                      : 'API PHP /api/health indisponível neste ambiente. Clique para tentar reconectar.'
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-950/50 px-2.5 py-1.5 text-[11px] font-medium text-red-200 hover:bg-red-950/70 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                >
+                  <span className="h-2 w-2 rounded-full shrink-0 bg-red-500" aria-hidden="true" />
+                  <span>Erro de API</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={handleCopyDirectUrl}
+                title={`Copiar link direto do sistema: ${directSystemUrl}`}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#121215] px-2.5 py-1.5 text-[11px] font-medium text-zinc-200 hover:border-[#fa6607]/60 hover:text-white whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {copiedDirectUrl ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
+                    <span className="text-emerald-300">URL Copiada</span>
+                  </>
+                ) : (
+                  <>
+                    <Link2 className="h-3.5 w-3.5 text-[#fa6607]" aria-hidden="true" />
+                    <span>URL Direta /sistema</span>
+                  </>
+                )}
+              </button>
+
+              {allowedTabIds.includes('notificacoes') && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('notificacoes')}
+                  aria-label="Abrir central de notificações"
+                  title="Central de Notificações"
+                  className="relative inline-flex h-8 w-8 md:h-9 md:w-9 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-[#121215] text-zinc-200 hover:border-[#fa6607]/60 hover:text-white cursor-pointer"
+                >
+                  <Bell className="h-4 w-4" aria-hidden="true" />
+                  {unreadNotificationsCount > 0 && (
+                    <span className="absolute -right-1 -top-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-[#fa6607] px-1 font-mono text-[10px] font-bold text-white tabular-nums">
+                      {unreadNotificationsCount}
+                    </span>
+                  )}
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              {activeOperator && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (allowedTabIds.includes('equipe')) setActiveTab('equipe');
+                  }}
+                  className="flex items-center gap-2 rounded-lg px-1.5 py-1 text-right hover:bg-white/[0.04] cursor-pointer max-w-[190px] sm:max-w-[240px] md:max-w-none"
+                  title="Perfil do operador ativo"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-[11px] md:text-xs font-medium text-white">
+                      {activeOperator.name}
+                    </div>
+                    <div className="hidden xl:block truncate text-[11px] text-zinc-400">
+                      Nível {activeOperator.hierarchyLevel} · {activeOperator.role}
+                    </div>
+                  </div>
+                  <MediaFrame
+                    src={activeOperator.avatarUrl}
+                    alt={activeOperator.name}
+                    className="h-8 w-8 md:h-9 md:w-9 shrink-0 rounded-full object-cover border border-[#fa6607]/40 bg-black"
+                  />
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={onBackToPortal}
+                className="hidden md:inline-flex lg:hidden rounded-lg border border-white/15 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/5 cursor-pointer"
+              >
+                Portal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void logoutAdminSession();
+                }}
+                className="hidden md:inline-flex rounded-lg border border-white/15 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/5 cursor-pointer"
+              >
+                Sair
+              </button>
+            </div>
           </div>
         </header>
 
         {/* Fixed Mobile Admin Drawer — sempre abre no viewport atual independente do scroll */}
         {mobileMenuOpen && (
-          <div className="no-print lg:hidden fixed inset-x-0 top-16 bottom-0 z-50 flex">
+          <div className="no-print lg:hidden fixed inset-0 z-50 flex">
             <div className="relative z-10 w-full max-w-xs h-full overflow-y-auto border-r border-white/10 bg-[#0D0D0F] p-4 shadow-2xl space-y-1.5">
               <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-2">
                 <div>
