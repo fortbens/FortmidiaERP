@@ -6,7 +6,9 @@ import {
   Copy,
   Download,
   ExternalLink,
+  FileText,
   Film,
+  Hash,
   Image as ImageIcon,
   Layers,
   Loader2,
@@ -32,12 +34,20 @@ import { aiApi } from '../../services/api';
 import { MarketingArtPreset } from '../../types/fortmidia';
 import { FortNewsVideoFrameStudio } from './FortNewsVideoFrameStudio';
 import { PautaSearchPicker } from './PautaSearchPicker';
+import {
+  SocialCaptionStudio,
+  buildEditorialSocialCopy,
+  copyTextSafe,
+  normalizeHashtagsString,
+  stripEmojisClean,
+  stripEmojisLive,
+} from './SocialCaptionStudio';
 
 interface MarketingStudioModuleProps {
   initialPautaId?: string | null;
 }
 
-type StudioMode = 'artes' | 'capas' | 'molduras' | 'convite';
+type StudioMode = 'artes' | 'capas' | 'molduras' | 'convite' | 'legendas';
 type FormatId =
   | 'feed_4_5'
   | 'square_1_1'
@@ -72,6 +82,7 @@ const MODE_FORMATS: Record<StudioMode, FormatId[]> = {
   capas: ['youtube_16_9', 'reels_9_16', 'shorts_9_16'],
   molduras: ['reels_9_16'],
   convite: ['feed_4_5', 'story_9_16', 'youtube_16_9'],
+  legendas: ['feed_4_5'],
 };
 
 const BG_PRESETS = [
@@ -393,20 +404,27 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
     billingUrl?: string;
   } | null>(null);
 
-  // Social Post Caption
+  // Social Post Caption (Sempre Sem Emojis)
   const [socialCaption, setSocialCaption] = useState(
     'Acompanhe todos os detalhes da reportagem regional no Portal Jornal FortNews.'
   );
   const [hashtags, setHashtags] = useState(
     '#JornalFortNews #GrupoFortMidia #CIMBAJU #FrancoDaRocha #Caieiras'
   );
-  const [copiedCaption, setCopiedCaption] = useState(false);
+  const [copiedType, setCopiedType] = useState<'all' | 'caption' | 'hashtags' | null>(null);
+  const [quickCaptionGenerating, setQuickCaptionGenerating] = useState(false);
+  const [quickCaptionError, setQuickCaptionError] = useState<string | null>(null);
+  const [captionSyncTick, setCaptionSyncTick] = useState(0);
+  const [lastVisualMode, setLastVisualMode] = useState<Exclude<StudioMode, 'legendas'>>('artes');
   const [editorTab, setEditorTab] = useState<'textos' | 'linhas' | 'marca'>('textos');
 
   const handleSwitchStudioMode = (mode: StudioMode) => {
+    if (mode !== 'legendas') {
+      setLastVisualMode(mode);
+    }
     setStudioMode(mode);
     const validFormats = MODE_FORMATS[mode];
-    if (!validFormats.includes(formatId)) {
+    if (mode !== 'legendas' && !validFormats.includes(formatId)) {
       setFormatId(validFormats[0]);
     }
     if (mode === 'capas') {
@@ -416,6 +434,14 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
       setBgImageUrl('/assets/aistudio/Microfone_dc305011.jpg');
       setBadgeText('CONVITE OFICIAL · PODCAST');
     }
+  };
+
+  const handleOpenCaptionStudioFromArt = () => {
+    if (studioMode !== 'legendas') {
+      setLastVisualMode(studioMode);
+    }
+    setCaptionSyncTick((n) => n + 1);
+    setStudioMode('legendas');
   };
 
   const applyMaskPreset = (mode: MaskMode) => {
@@ -483,11 +509,13 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
       art.socialCreative?.storyCta || `Leia completo em ${newsPortalSettings.domain}`
     );
     setSocialCaption(
-      art.socialCreative?.instagramCaption ||
-        `${art.title}\n\n${art.summary}\n\nLeia completo: ${siteSettings.newsPortalUrl}`
+      stripEmojisClean(
+        art.socialCreative?.instagramCaption ||
+          `${art.title}\n\n${art.summary}\n\nLeia completo: ${siteSettings.newsPortalUrl}`
+      )
     );
     if (art.socialCreative?.hashtags) {
-      setHashtags(art.socialCreative.hashtags);
+      setHashtags(normalizeHashtagsString(art.socialCreative.hashtags));
     }
   };
 
@@ -1119,13 +1147,83 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
     link.click();
   };
 
-  const handleCopyCaption = async () => {
+  const handleCopySocial = async (kind: 'all' | 'caption' | 'hashtags') => {
+    const cleanCaption = stripEmojisClean(socialCaption);
+    const cleanTags = normalizeHashtagsString(hashtags);
+    const payload =
+      kind === 'all'
+        ? [cleanCaption, cleanTags].filter(Boolean).join('\n\n')
+        : kind === 'caption'
+          ? cleanCaption
+          : cleanTags;
+    const ok = await copyTextSafe(payload);
+    if (ok) {
+      setCopiedType(kind);
+      window.setTimeout(() => setCopiedType(null), 2400);
+    }
+  };
+
+  const buildCurrentArtCaptionPayload = () => {
+    const isInvite = studioMode === 'convite';
+    return {
+      platform:
+        formatId === 'story_9_16' || formatId === 'reels_9_16' || formatId === 'shorts_9_16'
+          ? 'Reels / Stories'
+          : formatId === 'youtube_16_9'
+            ? 'YouTube'
+            : 'Instagram Feed',
+      tone: isInvite ? 'Convite Podcast / Entrevista' : 'Jornalístico / Direto',
+      brand:
+        isInvite || brandPreset === 'podcast'
+          ? 'Podcast FortNews'
+          : brandPreset === 'fortmidia'
+            ? 'Grupo FortMídia'
+            : 'Jornal FortNews',
+      headline: isInvite ? `${programName} recebe ${guestName}` : headlineText,
+      subtitle: isInvite
+        ? `${guestName} (${guestRole}) conversa com ${hostName}. ${headlineText}`
+        : subtitleText,
+      city: isInvite ? 'Regional CIMBAJU' : cityText || 'Regional CIMBAJU',
+      category: isInvite ? 'Podcast' : badgeText || 'Notícias',
+      details: isInvite
+        ? `Data: ${inviteDate} | Horário: ${inviteTime} | Transmissão: ${inviteChannel}`
+        : '',
+      ctaLink: isInvite ? inviteChannel : newsPortalSettings.domain,
+      hashtagCount: 8,
+    };
+  };
+
+  const handleQuickGenerateEditorialCaption = () => {
+    setQuickCaptionError(null);
+    const result = buildEditorialSocialCopy(buildCurrentArtCaptionPayload());
+    setSocialCaption(result.caption);
+    setHashtags(result.hashtags);
+  };
+
+  const handleQuickGenerateAiCaption = async () => {
+    setQuickCaptionGenerating(true);
+    setQuickCaptionError(null);
     try {
-      await navigator.clipboard.writeText(`${socialCaption}\n\n${hashtags}`);
-      setCopiedCaption(true);
-      window.setTimeout(() => setCopiedCaption(false), 2500);
+      const payload = buildCurrentArtCaptionPayload();
+      const res = await aiApi.generateSocialCaption(payload);
+      if (!res.ok || !res.data?.caption) {
+        setQuickCaptionError(
+          res.error ||
+            'Não foi possível gerar com IA. Use o botão "Modelo Rápido" ou abra o Gerador Completo.'
+        );
+        return;
+      }
+      setSocialCaption(stripEmojisClean(res.data.caption));
+      setHashtags(
+        normalizeHashtagsString(
+          res.data.hashtagList?.length ? res.data.hashtagList : res.data.hashtags || '',
+          payload.hashtagCount
+        )
+      );
     } catch {
-      setCopiedCaption(false);
+      setQuickCaptionError('Erro de conexão com a IA. Use o botão "Modelo Rápido".');
+    } finally {
+      setQuickCaptionGenerating(false);
     }
   };
 
@@ -1148,31 +1246,46 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-display text-xl sm:text-2xl font-bold text-white">
-            Estúdio de Marketing · Artes, Capas & Convites Podcast
+            Estúdio de Marketing · Artes, Capas, Convites & Legendas
           </h1>
           <p className="mt-1 text-xs text-zinc-400">
-            Crie artes de feed com Máscara Branca para fotos claras, capas de Reels/Shorts/YouTube e convites de Podcast com foto de convidados e Thumbnail gerada por IA.
+            Crie artes de feed, capas de Reels/Shorts/YouTube, convites de Podcast e gere legendas e hashtags (#) para redes sociais sempre sem emojis.
           </p>
         </div>
 
-        {studioMode !== 'molduras' && (
+        {studioMode === 'legendas' ? (
           <button
             type="button"
-            onClick={handleDownloadPng}
+            onClick={() => handleCopySocial('all')}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#fa6607] px-5 py-2.5 text-xs font-semibold text-white hover:bg-[#e55a00] cursor-pointer whitespace-nowrap"
           >
-            <Download className="h-4 w-4" aria-hidden="true" />
-            Baixar Arte PNG ({ALL_FORMAT_SPECS[formatId].w}×{ALL_FORMAT_SPECS[formatId].h})
+            {copiedType === 'all' ? (
+              <Check className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <Copy className="h-4 w-4" aria-hidden="true" />
+            )}
+            {copiedType === 'all' ? 'Legenda + # Copiadas!' : 'Copiar Legenda + #'}
           </button>
+        ) : (
+          studioMode !== 'molduras' && (
+            <button
+              type="button"
+              onClick={handleDownloadPng}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#fa6607] px-5 py-2.5 text-xs font-semibold text-white hover:bg-[#e55a00] cursor-pointer whitespace-nowrap"
+            >
+              <Download className="h-4 w-4" aria-hidden="true" />
+              Baixar Arte PNG ({ALL_FORMAT_SPECS[formatId].w}×{ALL_FORMAT_SPECS[formatId].h})
+            </button>
+          )
         )}
       </div>
 
-      {/* 4 STUDIO MODE TABS */}
+      {/* 5 STUDIO MODE TABS */}
       <div className="flex flex-wrap gap-2 rounded-xl border border-white/10 bg-[#121215] p-1.5">
         <button
           type="button"
           onClick={() => handleSwitchStudioMode('artes')}
-          className={`flex-1 min-w-[160px] inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-xs font-semibold cursor-pointer ${
+          className={`flex-1 min-w-[150px] inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2.5 text-xs font-semibold cursor-pointer ${
             studioMode === 'artes' ? 'bg-[#fa6607] text-white' : 'text-zinc-400 hover:text-white'
           }`}
         >
@@ -1182,37 +1295,80 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
         <button
           type="button"
           onClick={() => handleSwitchStudioMode('molduras')}
-          className={`flex-1 min-w-[180px] inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-xs font-semibold cursor-pointer ${
+          className={`flex-1 min-w-[160px] inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2.5 text-xs font-semibold cursor-pointer ${
             studioMode === 'molduras' ? 'bg-[#fa6607] text-white' : 'text-zinc-400 hover:text-white'
           }`}
         >
           <Video className="h-4 w-4" />
-          Molduras de Vídeo (FortNews)
+          Molduras de Vídeo
         </button>
         <button
           type="button"
           onClick={() => handleSwitchStudioMode('capas')}
-          className={`flex-1 min-w-[170px] inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-xs font-semibold cursor-pointer ${
+          className={`flex-1 min-w-[160px] inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2.5 text-xs font-semibold cursor-pointer ${
             studioMode === 'capas' ? 'bg-[#fa6607] text-white' : 'text-zinc-400 hover:text-white'
           }`}
         >
           <Film className="h-4 w-4" />
-          Capas Reels, Shorts & YouTube
+          Capas Reels & YouTube
         </button>
         <button
           type="button"
           onClick={() => handleSwitchStudioMode('convite')}
-          className={`flex-1 min-w-[170px] inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-xs font-semibold cursor-pointer ${
+          className={`flex-1 min-w-[160px] inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2.5 text-xs font-semibold cursor-pointer ${
             studioMode === 'convite' ? 'bg-[#fa6607] text-white' : 'text-zinc-400 hover:text-white'
           }`}
         >
           <Mic2 className="h-4 w-4" />
-          Convites Podcast & IA Thumbnail
+          Convites Podcast & IA
+        </button>
+        <button
+          type="button"
+          onClick={() => handleSwitchStudioMode('legendas')}
+          className={`flex-1 min-w-[175px] inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2.5 text-xs font-semibold cursor-pointer ${
+            studioMode === 'legendas' ? 'bg-[#fa6607] text-white' : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <Hash className="h-4 w-4" />
+          Legendas & # (Redes)
         </button>
       </div>
 
       {studioMode === 'molduras' ? (
         <FortNewsVideoFrameStudio />
+      ) : studioMode === 'legendas' ? (
+        <SocialCaptionStudio
+          pautas={pautas}
+          selectedPautaId={selectedPautaId}
+          onSelectPauta={(id) => {
+            if (!id) {
+              setSelectedPautaId('');
+            } else {
+              applyArticleToArt(id);
+            }
+          }}
+          socialCaption={socialCaption}
+          setSocialCaption={setSocialCaption}
+          hashtags={hashtags}
+          setHashtags={setHashtags}
+          defaultPortalDomain={newsPortalSettings.domain}
+          autoSyncTick={captionSyncTick}
+          currentArtContext={{
+            mode: lastVisualMode,
+            headline: headlineText,
+            subtitle: subtitleText,
+            city: cityText,
+            badge: badgeText,
+            ctaLink: footerText || newsPortalSettings.domain,
+            programName,
+            guestName,
+            guestRole,
+            hostName,
+            inviteDate,
+            inviteTime,
+            inviteChannel,
+          }}
+        />
       ) : (
       <>
       {/* Saved Presets Bar (Super Admin Save + Lock) & Format/Importer */}
@@ -2384,35 +2540,103 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
                 </fieldset>
 
                 <div className="space-y-2.5 border-t border-white/10 pt-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-white">
-                      Legenda & Hashtags para Publicar nas Redes
-                    </span>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-white">
+                        Legenda & Hashtags (#) — Sem Emojis
+                      </span>
+                    </div>
                     <button
                       type="button"
-                      onClick={handleCopyCaption}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-2.5 py-1 text-[11px] text-zinc-200 hover:bg-white/5 cursor-pointer"
+                      onClick={handleOpenCaptionStudioFromArt}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#fa6607] hover:underline cursor-pointer"
                     >
-                      {copiedCaption ? (
-                        <Check className="h-3.5 w-3.5 text-emerald-400" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" />
-                      )}
-                      {copiedCaption ? 'Copiada!' : 'Copiar Legenda'}
+                      <Hash className="h-3 w-3" />
+                      Abrir Gerador Completo
                     </button>
                   </div>
+
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleQuickGenerateAiCaption}
+                      disabled={quickCaptionGenerating}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#fa6607] px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
+                    >
+                      {quickCaptionGenerating ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3 w-3" />
+                      )}
+                      {quickCaptionGenerating ? 'Gerando...' : 'Gerar com IA'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleQuickGenerateEditorialCaption}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#0A0A0A] px-2.5 py-1.5 text-[11px] font-medium text-zinc-200 hover:bg-white/5 cursor-pointer"
+                    >
+                      <FileText className="h-3 w-3 text-[#D4AF37]" />
+                      Modelo Rápido
+                    </button>
+                  </div>
+
+                  {quickCaptionError && (
+                    <p className="rounded-lg border border-red-500/35 bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-200">
+                      {quickCaptionError}
+                    </p>
+                  )}
+
                   <textarea
                     rows={4}
                     value={socialCaption}
-                    onChange={(e) => setSocialCaption(e.target.value)}
+                    onChange={(e) => setSocialCaption(stripEmojisLive(e.target.value))}
                     className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white"
                   />
                   <input
                     type="text"
                     value={hashtags}
-                    onChange={(e) => setHashtags(e.target.value)}
+                    onChange={(e) => setHashtags(stripEmojisLive(e.target.value))}
                     className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-1.5 text-xs text-[#D4AF37]"
                   />
+
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleCopySocial('all')}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-white/15 cursor-pointer"
+                    >
+                      {copiedType === 'all' ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                      {copiedType === 'all' ? 'Tudo Copiado!' : 'Copiar Tudo (Legenda + #)'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCopySocial('caption')}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 px-2.5 py-1.5 text-[11px] text-zinc-200 hover:bg-white/5 cursor-pointer"
+                    >
+                      {copiedType === 'caption' ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                      {copiedType === 'caption' ? 'Legenda Copiada!' : 'Copiar Legenda'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCopySocial('hashtags')}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[#D4AF37]/35 px-2.5 py-1.5 text-[11px] text-[#D4AF37] hover:bg-[#D4AF37]/10 cursor-pointer"
+                    >
+                      {copiedType === 'hashtags' ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      ) : (
+                        <Hash className="h-3.5 w-3.5" />
+                      )}
+                      {copiedType === 'hashtags' ? '# Copiadas!' : 'Copiar #'}
+                    </button>
+                  </div>
                 </div>
               </>
             )}
@@ -2511,19 +2735,29 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
               <Sparkles className="h-3.5 w-3.5 text-[#D4AF37]" />
               Exportação idêntica à prévia em PNG
             </span>
-            <button
-              type="button"
-              onClick={() => {
-                applyMaskPreset('dark');
-                const target =
-                  marketingPresets.find((p) => p.id === selectedPresetId) ?? marketingPresets[0];
-                if (target) applySavedPreset(target);
-              }}
-              className="inline-flex items-center gap-1 text-zinc-300 hover:text-white cursor-pointer"
-            >
-              <RefreshCw className="h-3 w-3" />
-              Restaurar Padrão Visual
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleOpenCaptionStudioFromArt}
+                className="inline-flex items-center gap-1 rounded-md border border-[#fa6607]/40 bg-[#fa6607]/10 px-2.5 py-1 font-semibold text-[#fa6607] hover:bg-[#fa6607]/20 cursor-pointer"
+              >
+                <Hash className="h-3 w-3" />
+                Gerar Legenda & # desta Arte
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  applyMaskPreset('dark');
+                  const target =
+                    marketingPresets.find((p) => p.id === selectedPresetId) ?? marketingPresets[0];
+                  if (target) applySavedPreset(target);
+                }}
+                className="inline-flex items-center gap-1 text-zinc-300 hover:text-white cursor-pointer"
+              >
+                <RefreshCw className="h-3 w-3" />
+                Restaurar Padrão Visual
+              </button>
+            </div>
           </div>
         </div>
       </div>

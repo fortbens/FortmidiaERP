@@ -2025,11 +2025,25 @@ if ($resource === 'ai' && $method === 'POST') {
     $body = readJsonBody();
     $action = strtolower(trim((string) ($body['action'] ?? '')));
 
-    if (!in_array($action, ['scan-news', 'generate-ticker', 'generate-thumbnail'], true)) {
+    if (!in_array($action, ['scan-news', 'generate-ticker', 'generate-thumbnail', 'generate-social-caption'], true)) {
         jsonResponse(400, [
-            'error' => 'Ação IA inválida. Utilize: scan-news, generate-ticker ou generate-thumbnail.',
+            'error' => 'Ação IA inválida. Utilize: scan-news, generate-ticker, generate-thumbnail ou generate-social-caption.',
         ]);
     }
+
+    $stripEmojisPhp = static function (string $text): string {
+        $cleaned = preg_replace(
+            '/[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{2300}-\x{23FF}\x{FE0E}\x{FE0F}\x{200D}\x{20E3}]/u',
+            '',
+            $text
+        );
+        $cleaned = str_replace("\r\n", "\n", (string) ($cleaned ?? $text));
+        $lines = array_map(
+            static fn(string $line): string => trim((string) preg_replace('/[ \t]{2,}/', ' ', $line)),
+            explode("\n", $cleaned)
+        );
+        return trim((string) preg_replace('/\n{3,}/', "\n\n", implode("\n", $lines)));
+    };
 
     if ($action === 'generate-ticker') {
         $region = trim((string) ($body['region'] ?? $body['territory'] ?? 'Regional CIMBAJU, São Paulo e Brasil'));
@@ -2043,11 +2057,51 @@ if ($resource === 'ai' && $method === 'POST') {
         $region = trim((string) ($body['territory'] ?? $body['region'] ?? 'Regional CIMBAJU'));
         $topics = trim((string) ($body['topics'] ?? $body['topic'] ?? 'infraestrutura, mobilidade, saúde, segurança, economia'));
         $count = max(1, min(4, (int) ($body['count'] ?? 2)));
-        $prompt = "Você é editor-chefe do Jornal FortNews (CIMBAJU). Pesquise notícias atuais sobre \"{$region}\" e temas \"{$topics}\". Retorne exclusivamente um JSON Array com {$count} objetos contendo: title, summary, body, suggestedSeal, city e socialCreative (headlineOverlay, instagramCaption, storyCta, hashtags, visualDirection).";
+        $prompt = "Você é editor-chefe do Jornal FortNews (CIMBAJU). Pesquise notícias atuais sobre \"{$region}\" e temas \"{$topics}\". Retorne exclusivamente um JSON Array com {$count} objetos contendo: title, summary, body, suggestedSeal, city e socialCreative (headlineOverlay, instagramCaption, storyCta, hashtags, visualDirection). Sem emojis nas legendas.";
         $geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
         $payload = [
             'contents' => [['parts' => [['text' => $prompt]]]],
             'tools' => [['google_search' => new stdClass()]],
+        ];
+    } elseif ($action === 'generate-social-caption') {
+        $platform = $stripEmojisPhp(substr((string) ($body['platform'] ?? 'Instagram Feed'), 0, 60));
+        $tone = $stripEmojisPhp(substr((string) ($body['tone'] ?? 'Jornalístico / Direto'), 0, 60));
+        $brand = $stripEmojisPhp(substr((string) ($body['brand'] ?? 'Jornal FortNews'), 0, 80));
+        $headline = $stripEmojisPhp(substr((string) ($body['headline'] ?? ''), 0, 260));
+        $subtitle = $stripEmojisPhp(substr((string) ($body['subtitle'] ?? ''), 0, 600));
+        $city = $stripEmojisPhp(substr((string) ($body['city'] ?? 'Regional CIMBAJU'), 0, 80));
+        $category = $stripEmojisPhp(substr((string) ($body['category'] ?? 'Notícias'), 0, 60));
+        $details = $stripEmojisPhp(substr((string) ($body['details'] ?? ''), 0, 1200));
+        $ctaLink = $stripEmojisPhp(substr((string) ($body['ctaLink'] ?? 'jornalfortnews.com.br'), 0, 180));
+        $hashtagCount = max(3, min(20, (int) ($body['hashtagCount'] ?? 8)));
+
+        if ($headline === '' && $subtitle === '' && $details === '') {
+            jsonResponse(400, ['error' => 'Informe ao menos um título, resumo ou briefing para gerar a legenda.']);
+        }
+
+        $prompt = "Você é redator sênior de redes sociais do Grupo FortMídia e do Portal Jornal FortNews (CIMBAJU).\n"
+            . "REGRAS OBRIGATÓRIAS:\n"
+            . "1. Escreva em Português do Brasil claro e profissional.\n"
+            . "2. NUNCA utilize emojis, emoticons ou símbolos gráficos em nenhuma parte da legenda ou das hashtags.\n"
+            . "3. Não use asteriscos de Markdown e não coloque hashtags dentro da legenda.\n"
+            . "4. Retorne EXCLUSIVAMENTE um JSON válido com as chaves \"caption\" (string) e \"hashtags\" (array com exatamente {$hashtagCount} strings iniciadas por #).\n\n"
+            . "Dados da publicação:\n"
+            . "- Rede social: {$platform}\n"
+            . "- Tom de voz: {$tone}\n"
+            . "- Marca: {$brand}\n"
+            . "- Cidade/Região: {$city}\n"
+            . "- Editoria/Selo: {$category}\n"
+            . "- Título/Tema: {$headline}\n"
+            . "- Resumo: {$subtitle}\n"
+            . "- Informações adicionais: {$details}\n"
+            . "- Link/CTA: {$ctaLink}";
+
+        $geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+        $payload = [
+            'contents' => [['parts' => [['text' => $prompt]]]],
+            'generationConfig' => [
+                'responseMimeType' => 'application/json',
+            ],
         ];
     } else {
         $customPrompt = trim((string) ($body['prompt'] ?? 'Estúdio moderno de podcast jornalístico com iluminação laranja e dourada, sem textos'));
@@ -2100,6 +2154,42 @@ if ($resource === 'ai' && $method === 'POST') {
 
     $cleaned = preg_replace('/^```(?:json)?\s*|\s*```$/i', '', trim($textOut)) ?: '[]';
     $parsedJson = json_decode($cleaned, true);
+
+    if ($action === 'generate-social-caption') {
+        if (!is_array($parsedJson)) {
+            jsonResponse(502, ['error' => 'A IA retornou um formato inválido ao gerar a legenda.']);
+        }
+        $captionText = str_replace('**', '', $stripEmojisPhp((string) ($parsedJson['caption'] ?? '')));
+        $rawTags = $parsedJson['hashtags'] ?? [];
+        if (is_string($rawTags)) {
+            $rawTags = preg_split('/[\s,;]+/', $rawTags) ?: [];
+        }
+        $normalizedTags = [];
+        $seenTags = [];
+        if (is_array($rawTags)) {
+            foreach ($rawTags as $tag) {
+                $t = preg_replace('/[^0-9A-Za-zÀ-ÖØ-öø-ÿ_]/u', '', ltrim($stripEmojisPhp((string) $tag), '#'));
+                if ($t === null || strlen($t) < 2) {
+                    continue;
+                }
+                $key = mb_strtolower($t, 'UTF-8');
+                if (isset($seenTags[$key])) {
+                    continue;
+                }
+                $seenTags[$key] = true;
+                $normalizedTags[] = '#' . $t;
+            }
+        }
+        if ($captionText === '') {
+            jsonResponse(502, ['error' => 'Não foi possível gerar o texto da legenda.']);
+        }
+        jsonResponse(200, [
+            'caption' => $captionText,
+            'hashtags' => implode(' ', $normalizedTags),
+            'hashtagList' => $normalizedTags,
+            'generatedAt' => date('d/m/Y H:i'),
+        ]);
+    }
 
     if ($action === 'generate-ticker') {
         jsonResponse(200, [

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 
 function readCliArg(flag: string): string | undefined {
   const idx = process.argv.indexOf(flag);
@@ -70,6 +70,50 @@ interface ThumbnailRequestBody {
   hostName?: string;
   themeColor?: string;
   aspectRatio?: '16:9' | '9:16' | '1:1' | '3:4' | '4:3';
+}
+
+interface SocialCaptionRequestBody {
+  platform?: string;
+  tone?: string;
+  brand?: string;
+  headline?: string;
+  subtitle?: string;
+  city?: string;
+  category?: string;
+  details?: string;
+  ctaLink?: string;
+  hashtagCount?: number;
+}
+
+function stripEmojisClean(input: string): string {
+  return input
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0E\uFE0F\u200D\u20E3\u{1F1E6}-\u{1F1FF}\u{2600}-\u{27BF}]/gu, '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]{2,}/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function normalizeHashtagList(rawTags: string[], maxCount: number): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const raw of rawTags) {
+    const cleaned = stripEmojisClean(String(raw || ''))
+      .replace(/^#+/, '')
+      .replace(/[^0-9A-Za-zÀ-ÖØ-öø-ÿ_]/g, '')
+      .trim();
+    if (!cleaned || cleaned.length < 2) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(`#${cleaned}`);
+    if (result.length >= maxCount) break;
+  }
+
+  return result;
 }
 
 interface RawAiArticle {
@@ -359,8 +403,14 @@ async function startServer() {
       next();
       return;
     }
+    if (action === 'generate-social-caption') {
+      req.url = '/api/ai/generate-social-caption';
+      next();
+      return;
+    }
     res.status(400).json({
-      error: 'Ação IA inválida. Utilize action: "scan-news", "generate-ticker" ou "generate-thumbnail".',
+      error:
+        'Ação IA inválida. Utilize action: "scan-news", "generate-ticker", "generate-thumbnail" ou "generate-social-caption".',
     });
   });
 
@@ -758,6 +808,135 @@ Retorne EXCLUSIVAMENTE um JSON Array de strings (sem markdown ou texto fora do a
       });
     } catch (err) {
       const formatted = formatGeminiError(err, 'Falha ao gerar thumbnail com IA');
+      res.status(formatted.status).json(formatted);
+    }
+  });
+
+  app.post('/api/ai/generate-social-caption', async (req, res) => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      res.status(503).json({
+        code: 'MISSING_API_KEY',
+        error:
+          'GEMINI_API_KEY não configurada no servidor. Configure a chave no servidor ou utilize o botão "Gerar Modelo Editorial" para montar a legenda instantaneamente.',
+      });
+      return;
+    }
+
+    const body = (req.body || {}) as SocialCaptionRequestBody;
+    const platform = stripEmojisClean(String(body.platform || 'Instagram Feed')).slice(0, 60);
+    const tone = stripEmojisClean(String(body.tone || 'Jornalístico / Direto')).slice(0, 60);
+    const brand = stripEmojisClean(String(body.brand || 'Jornal FortNews')).slice(0, 80);
+    const headline = stripEmojisClean(String(body.headline || '')).slice(0, 260);
+    const subtitle = stripEmojisClean(String(body.subtitle || '')).slice(0, 600);
+    const city = stripEmojisClean(String(body.city || 'Regional CIMBAJU')).slice(0, 80);
+    const category = stripEmojisClean(String(body.category || 'Notícias')).slice(0, 60);
+    const details = stripEmojisClean(String(body.details || '')).slice(0, 1200);
+    const ctaLink = stripEmojisClean(String(body.ctaLink || 'jornalfortnews.com.br')).slice(0, 180);
+    const hashtagCount = Math.max(3, Math.min(20, Number(body.hashtagCount) || 8));
+
+    if (!headline && !subtitle && !details) {
+      res.status(400).json({
+        error: 'Informe ao menos um título, resumo ou briefing para gerar a legenda.',
+      });
+      return;
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+      });
+
+      const systemInstruction = `Você é redator sênior de redes sociais do Grupo FortMídia e do Portal Jornal FortNews (região do CIMBAJU: Franco da Rocha, Caieiras, Francisco Morato, Cajamar e Mairiporã).
+REGRAS OBRIGATÓRIAS:
+1. Escreva sempre em Português do Brasil (PT-BR) claro, profissional e envolvente.
+2. NUNCA use emojis, emoticons, ícones pictográficos ou símbolos gráficos decorativos em nenhuma parte da legenda ou das hashtags.
+3. NÃO use formatação Markdown (sem asteriscos **, sem crases, sem títulos com # na legenda).
+4. NÃO coloque hashtags dentro do campo "caption"; coloque todas as hashtags exclusivamente no array "hashtags".
+5. Adapte estrutura, tamanho e chamada para ação (CTA) à rede social e ao tom solicitados.`;
+
+      const prompt = `Crie uma legenda pronta para publicação e exatamente ${hashtagCount} hashtags relevantes para o seguinte conteúdo:
+- Rede social de destino: ${platform}
+- Tom de voz: ${tone}
+- Marca / Assinatura: ${brand}
+- Cidade / Abrangência: ${city}
+- Editoria / Selo: ${category}
+- Título / Tema principal: ${headline || '(não informado)'}
+- Resumo / Linha-fina: ${subtitle || '(não informado)'}
+- Informações adicionais / Briefing: ${details || '(não informado)'}
+- Link ou chamada final (CTA): ${ctaLink}
+
+Lembrete crítico: ZERO emojis em todo o texto. Separe parágrafos com quebra de linha dupla para fácil leitura no celular.`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: prompt,
+        config: {
+          systemInstruction,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              caption: {
+                type: Type.STRING,
+                description:
+                  'Legenda pronta para a rede social, em PT-BR, sem hashtags no texto e estritamente sem emojis.',
+              },
+              hashtags: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description:
+                  'Lista de hashtags iniciadas com #, sem espaços internos e estritamente sem emojis.',
+              },
+            },
+            required: ['caption', 'hashtags'],
+          },
+        },
+      });
+
+      const rawText = (response.text || '').trim();
+      const fenceMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const jsonStr = fenceMatch ? fenceMatch[1].trim() : rawText;
+
+      let parsed: { caption?: string; hashtags?: string[] | string } = {};
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch {
+        res.status(502).json({
+          error: 'A IA retornou um formato inesperado ao gerar a legenda. Tente novamente.',
+        });
+        return;
+      }
+
+      const cleanCaption = stripEmojisClean(String(parsed.caption || ''))
+        .replace(/\*\*/g, '')
+        .trim();
+
+      const rawTagArray = Array.isArray(parsed.hashtags)
+        ? parsed.hashtags
+        : typeof parsed.hashtags === 'string'
+          ? parsed.hashtags.split(/[\s,;]+/)
+          : [];
+
+      const hashtagList = normalizeHashtagList(rawTagArray, hashtagCount);
+
+      if (!cleanCaption) {
+        res.status(502).json({
+          error: 'Não foi possível gerar o texto da legenda. Tente ajustar o tema informado.',
+        });
+        return;
+      }
+
+      res.json({
+        caption: cleanCaption,
+        hashtags: hashtagList.join(' '),
+        hashtagList,
+        generatedAt: new Date().toLocaleString('pt-BR'),
+      });
+    } catch (err) {
+      const formatted = formatGeminiError(err, 'Falha ao gerar legenda com IA');
       res.status(formatted.status).json(formatted);
     }
   });

@@ -798,6 +798,29 @@ export interface AiThumbnailPayload {
   aspectRatio?: '16:9' | '9:16' | '1:1' | '3:4' | '4:3';
 }
 
+export interface AiSocialCaptionPayload {
+  platform?: string;
+  tone?: string;
+  brand?: string;
+  headline?: string;
+  subtitle?: string;
+  city?: string;
+  category?: string;
+  details?: string;
+  ctaLink?: string;
+  hashtagCount?: number;
+}
+
+export interface AiSocialCaptionResponse {
+  caption?: string;
+  hashtags?: string;
+  hashtagList?: string[];
+  generatedAt?: string;
+  error?: string;
+  code?: string;
+  billingUrl?: string;
+}
+
 export const aiApi = {
   scanNews: <T = Record<string, unknown>>(payload: AiScanPayload) =>
     apiRequest<T>('/ai', {
@@ -816,6 +839,12 @@ export const aiApi = {
       method: 'POST',
       body: { action: 'generate-thumbnail', ...payload },
       timeoutMs: 45000,
+    }),
+  generateSocialCaption: (payload: AiSocialCaptionPayload) =>
+    apiRequest<AiSocialCaptionResponse>('/ai', {
+      method: 'POST',
+      body: { action: 'generate-social-caption', ...payload },
+      timeoutMs: 30000,
     }),
 };
 
