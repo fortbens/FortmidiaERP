@@ -268,10 +268,23 @@ export interface FinancialEntry {
 
 /* ---------------- CMS COMPLETO (FORTMÍDIA & FORTNEWS) ---------------- */
 
+export interface SiteVideoItem {
+  id: string;
+  title: string;
+  description?: string;
+  videoUrl: string;
+  posterUrl?: string;
+  category?: string;
+  active: boolean;
+  featured?: boolean;
+  createdAt: string;
+}
+
 export interface SiteSettings {
   brandName: string;
   brandHighlight: string;
   logoUrl: string;
+  faviconUrl?: string;
   logoMode: 'wordmark' | 'image';
   logoHeightPx?: number;
   primaryColor: string;
@@ -281,6 +294,10 @@ export interface SiteSettings {
   heroHeadline: string;
   heroSubheadline: string;
   heroPrimaryCta: string;
+  heroVideoUrl?: string;
+  heroVideoPosterUrl?: string;
+  heroVideoTitle?: string;
+  siteVideos?: SiteVideoItem[];
   newsPortalUrl: string;
   contactEmail: string;
   siteDomain: string;
@@ -303,6 +320,7 @@ export interface NewsPortalSettings {
   secondaryColor: string;
   domain: string;
   logoUrl: string;
+  faviconUrl?: string;
   logoHeightPx: number;
   logoFitMode: 'square' | 'wide' | 'auto';
   breakingTickerEnabled: boolean;
@@ -317,6 +335,11 @@ export interface NewsPortalSettings {
   showAds: boolean;
   footerText: string;
   enabledSeals: NewsSeal[];
+  featuredVideoEnabled?: boolean;
+  featuredVideoTitle?: string;
+  featuredVideoUrl?: string;
+  featuredVideoPosterUrl?: string;
+  portalVideos?: SiteVideoItem[];
 }
 
 export type GalleryCategory =

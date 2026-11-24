@@ -8,11 +8,14 @@ import {
   ExternalLink,
   Eye,
   FileText,
+  Film,
   Globe,
+  Image as ImageIcon,
   Instagram,
   Loader2,
   Megaphone,
   MessageCircle,
+  Play,
   Plus,
   Search,
   Send,
@@ -37,6 +40,11 @@ import {
 import { SocialCreativeModal } from './SocialCreativeModal';
 import { FloatingHorizontalScroll } from '../FloatingHorizontalScroll';
 import { matchesPautaQuery } from '../../utils/pautaCode';
+import {
+  getVideoEmbedUrl,
+  getYouTubeThumbnailUrl,
+  isVideoArticle,
+} from '../../utils/videoEmbed';
 
 const PAUTA_STATUSES: PautaStatus[] = [
   'Apuração de Rua',
@@ -187,6 +195,8 @@ export const JournalismModule: React.FC = () => {
   const [newSummary, setNewSummary] = useState('');
   const [newBody, setNewBody] = useState('');
   const [newImageUrl, setNewImageUrl] = useState('/assets/aistudio/outdoor_6fc8fbe7.jpg');
+  const [newMediaType, setNewMediaType] = useState<'image' | 'video'>('image');
+  const [newVideoUrl, setNewVideoUrl] = useState('');
 
   const pendingCount = citizenReports.filter((r) => r.status === 'Aguardando Triagem').length;
   const awaitingApprovalCount = pautas.filter(
@@ -275,9 +285,39 @@ export const JournalismModule: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const handleCreatePauta = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleVideoUpload = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    cb: (dataUrl: string) => void
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) {
+      setTriageFeedback(
+        'Para vídeos acima de 15 MB, hospede no YouTube, Vimeo ou servidor MP4 e cole o link.'
+      );
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') cb(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const submitNewPauta = (publishImmediately: boolean) => {
     if (!newTitle.trim()) return;
+    const trimmedVideo = newVideoUrl.trim();
+    const resolvedMediaType: 'image' | 'video' = trimmedVideo ? 'video' : newMediaType;
+    const ytThumb = getYouTubeThumbnailUrl(trimmedVideo);
+    const resolvedImage =
+      newImageUrl.trim() && newImageUrl.trim() !== '/assets/aistudio/outdoor_6fc8fbe7.jpg'
+        ? newImageUrl.trim()
+        : ytThumb || newImageUrl.trim() || undefined;
+    const nowStamp = `${new Date().toLocaleDateString('pt-BR')} · ${new Date().toLocaleTimeString(
+      'pt-BR',
+      { hour: '2-digit', minute: '2-digit' }
+    )}`;
+
     addPauta({
       title: newTitle.trim(),
       city: newCity,
@@ -285,26 +325,50 @@ export const JournalismModule: React.FC = () => {
       format: newFormat,
       reporter: newReporter,
       deadline: new Date().toLocaleDateString('pt-BR'),
-      status: 'Roteiro & Entrevista',
-      approvalStatus: 'Aguardando Redator-Chefe',
+      status: publishImmediately ? 'Publicado' : 'Roteiro & Entrevista',
+      approvalStatus: publishImmediately ? 'Publicada no Site' : 'Aguardando Redator-Chefe',
+      approvedBy: publishImmediately ? `${chiefEditorName} (Editor-Chefe)` : undefined,
+      publishedAt: publishImmediately ? nowStamp : undefined,
       summary: newSummary.trim() || newTitle.trim(),
       body:
         newBody.trim() ||
         'Matéria redigida pela equipe FortNews aguardando revisão e aprovação do Redator-Chefe.',
-      imageUrl: newImageUrl.trim() || undefined,
+      imageUrl: resolvedImage,
+      mediaType: resolvedMediaType,
+      videoUrl: resolvedMediaType === 'video' ? trimmedVideo || undefined : undefined,
       socialCreative: {
         headlineOverlay: newTitle.trim().slice(0, 68),
         instagramCaption: `${newTitle.trim()}\n\n${newSummary.trim() || newTitle.trim()}\n\nLeia completo em jornalfortnews.com.br`,
-        storyCta: 'Leia a matéria completa no Jornal FortNews',
+        storyCta:
+          resolvedMediaType === 'video'
+            ? 'Assista à reportagem em vídeo no Jornal FortNews'
+            : 'Leia a matéria completa no Jornal FortNews',
         hashtags: '#JornalFortNews #GrupoFortMidia #CIMBAJU',
-        visualDirection: 'Card editorial com foto de capa e selo da editoria.',
+        visualDirection:
+          resolvedMediaType === 'video'
+            ? 'Card editorial de vídeo com play destacado e selo da editoria.'
+            : 'Card editorial com foto de capa e selo da editoria.',
       },
     });
     setNewTitle('');
     setNewSummary('');
     setNewBody('');
+    setNewMediaType('image');
+    setNewVideoUrl('');
+    setNewImageUrl('/assets/aistudio/outdoor_6fc8fbe7.jpg');
     setShowNewPauta(false);
-    setTriageFeedback('Matéria + rascunho de criativo enviados para a mesa do Redator-Chefe.');
+    setTriageFeedback(
+      publishImmediately
+        ? resolvedMediaType === 'video'
+          ? 'Matéria em vídeo publicada imediatamente nos sites FortNews e FortMídia.'
+          : 'Matéria publicada imediatamente nos sites FortNews e FortMídia.'
+        : 'Matéria + rascunho de criativo enviados para a mesa do Redator-Chefe.'
+    );
+  };
+
+  const handleCreatePauta = (e: React.FormEvent) => {
+    e.preventDefault();
+    submitNewPauta(false);
   };
 
   const filteredPautas = pautas.filter((p) => {
@@ -634,55 +698,136 @@ export const JournalismModule: React.FC = () => {
             className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white placeholder:text-zinc-500 focus:border-[#FF6600] focus:outline-none"
           />
 
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-3 flex-1">
-              <select
-                value={newReporter}
-                onChange={(e) => setNewReporter(e.target.value)}
-                aria-label="Selecionar repórter responsável"
-                className="w-56 rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white focus:border-[#fa6607] focus:outline-none"
-              >
-                <option value="Redação Central FortNews">Redação Central FortNews</option>
-                {reporters
-                  .filter((r) => r.active)
-                  .map((rep) => (
-                    <option key={rep.id} value={rep.name}>
-                      Repórter: {rep.name} ({rep.city})
-                    </option>
-                  ))}
-              </select>
-              <input
-                type="text"
-                value={newImageUrl}
-                onChange={(e) => setNewImageUrl(e.target.value)}
-                placeholder="URL da foto de capa"
-                className="flex-1 min-w-[180px] rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white focus:border-[#FF6600] focus:outline-none"
-              />
-              <label className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-zinc-200 cursor-pointer">
-                <Upload className="h-3.5 w-3.5 text-[#FF6600]" />
-                Foto
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => handleImageUpload(e, setNewImageUrl)}
-                />
-              </label>
+          {/* Formato de Mídia: Foto ou Vídeo */}
+          <div className="rounded-lg border border-white/10 bg-[#0A0A0A] p-3.5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold text-zinc-200">
+                Formato da Matéria (Foto ou Reportagem em Vídeo)
+              </span>
+              <div className="inline-flex rounded-lg border border-white/15 bg-[#121215] p-0.5 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setNewMediaType('image')}
+                  className={`inline-flex items-center gap-1 rounded px-2.5 py-1 cursor-pointer ${
+                    newMediaType === 'image' ? 'bg-[#FF6600] text-white' : 'text-zinc-400'
+                  }`}
+                >
+                  <ImageIcon className="h-3 w-3" aria-hidden="true" />
+                  Foto / Capa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewMediaType('video')}
+                  className={`inline-flex items-center gap-1 rounded px-2.5 py-1 cursor-pointer ${
+                    newMediaType === 'video' ? 'bg-[#FF6600] text-white' : 'text-zinc-400'
+                  }`}
+                >
+                  <Film className="h-3 w-3" aria-hidden="true" />
+                  Matéria em Vídeo
+                </button>
+              </div>
             </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setShowNewPauta(false)}
-                className="rounded-lg border border-white/15 px-3 py-2 text-xs text-zinc-300 hover:bg-white/5 cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                className="rounded-lg bg-[#FF6600] px-4 py-2 text-xs font-semibold text-white hover:bg-[#FF5500] cursor-pointer"
-              >
-                Enviar ao Redator-Chefe
-              </button>
+
+            {newMediaType === 'video' && (
+              <div className="flex flex-wrap items-center gap-2 border-b border-white/10 pb-3">
+                <input
+                  type="text"
+                  value={newVideoUrl}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setNewVideoUrl(val);
+                    const ytThumb = getYouTubeThumbnailUrl(val);
+                    if (
+                      ytThumb &&
+                      (!newImageUrl.trim() ||
+                        newImageUrl === '/assets/aistudio/outdoor_6fc8fbe7.jpg')
+                    ) {
+                      setNewImageUrl(ytThumb);
+                    }
+                  }}
+                  placeholder="Link do YouTube, Vimeo, Instagram Reels ou MP4 direto..."
+                  className="flex-1 min-w-[220px] rounded-lg border border-[#FF6600]/40 bg-[#121215] px-3 py-2 text-xs text-white placeholder:text-zinc-500 focus:border-[#FF6600] focus:outline-none"
+                />
+                <label className="inline-flex items-center gap-1.5 rounded-lg border border-[#FF6600]/40 bg-[#FF6600]/10 px-3 py-2 text-xs font-medium text-[#FF6600] cursor-pointer shrink-0">
+                  <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                  Subir Vídeo
+                  <input
+                    type="file"
+                    accept="video/mp4,video/webm,video/quicktime"
+                    className="hidden"
+                    onChange={(e) =>
+                      handleVideoUpload(e, (url) => {
+                        setNewVideoUrl(url);
+                        setNewMediaType('video');
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-3 flex-1">
+                <select
+                  value={newReporter}
+                  onChange={(e) => setNewReporter(e.target.value)}
+                  aria-label="Selecionar repórter responsável"
+                  className="w-56 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white focus:border-[#fa6607] focus:outline-none"
+                >
+                  <option value="Redação Central FortNews">Redação Central FortNews</option>
+                  {reporters
+                    .filter((r) => r.active)
+                    .map((rep) => (
+                      <option key={rep.id} value={rep.name}>
+                        Repórter: {rep.name} ({rep.city})
+                      </option>
+                    ))}
+                </select>
+                <input
+                  type="text"
+                  value={newImageUrl}
+                  onChange={(e) => setNewImageUrl(e.target.value)}
+                  placeholder={
+                    newMediaType === 'video'
+                      ? 'URL da capa/poster do vídeo (opcional p/ YouTube)'
+                      : 'URL da foto de capa'
+                  }
+                  className="flex-1 min-w-[180px] rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white focus:border-[#FF6600] focus:outline-none"
+                />
+                <label className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-zinc-200 cursor-pointer">
+                  <Upload className="h-3.5 w-3.5 text-[#FF6600]" aria-hidden="true" />
+                  Foto
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => handleImageUpload(e, setNewImageUrl)}
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowNewPauta(false)}
+                  className="rounded-lg border border-white/15 px-3 py-2 text-xs text-zinc-300 hover:bg-white/5 cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-lg border border-[#D4AF37]/40 bg-[#D4AF37]/10 px-3.5 py-2 text-xs font-semibold text-[#E6C868] hover:bg-[#D4AF37]/20 cursor-pointer"
+                >
+                  Enviar ao Redator-Chefe
+                </button>
+                <button
+                  type="button"
+                  onClick={() => submitNewPauta(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#FF6600] px-4 py-2 text-xs font-semibold text-white hover:bg-[#FF5500] cursor-pointer"
+                >
+                  <Globe className="h-3.5 w-3.5" aria-hidden="true" />
+                  Publicar Agora no Site
+                </button>
+              </div>
             </div>
           </div>
         </form>
@@ -799,6 +944,15 @@ export const JournalismModule: React.FC = () => {
                           className="text-[10px] font-bold text-amber-400"
                         >
                           · IA
+                        </span>
+                      )}
+                      {isVideoArticle(p) && (
+                        <span
+                          title="Matéria com player de vídeo publicado nos sites"
+                          className="inline-flex items-center gap-1 rounded bg-[#FF6600]/15 border border-[#FF6600]/35 px-1.5 py-0.5 text-[9px] font-bold text-[#FF6600]"
+                        >
+                          <Play className="h-2.5 w-2.5 fill-[#FF6600]" aria-hidden="true" />
+                          VÍDEO
                         </span>
                       )}
                     </div>
@@ -1269,6 +1423,150 @@ export const JournalismModule: React.FC = () => {
                 }}
                 className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs leading-relaxed text-white focus:border-[#FF6600] focus:outline-none"
               />
+            </div>
+
+            {/* Mídia da Matéria (Foto ou Vídeo) */}
+            <div className="rounded-lg border border-white/10 bg-[#0A0A0A] p-3.5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold text-zinc-200">
+                  Mídia da Matéria (Foto ou Vídeo para Publicação no Site)
+                </span>
+                <div className="inline-flex rounded-lg border border-white/15 bg-[#121215] p-0.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReviewingArticle({ ...reviewingArticle, mediaType: 'image' });
+                      updatePautaContent(reviewingArticle.id, { mediaType: 'image' });
+                    }}
+                    className={`inline-flex items-center gap-1 rounded px-2.5 py-1 cursor-pointer ${
+                      (reviewingArticle.mediaType || 'image') === 'image' &&
+                      !isVideoArticle(reviewingArticle)
+                        ? 'bg-[#FF6600] text-white'
+                        : 'text-zinc-400'
+                    }`}
+                  >
+                    <ImageIcon className="h-3 w-3" aria-hidden="true" />
+                    Foto
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReviewingArticle({ ...reviewingArticle, mediaType: 'video' });
+                      updatePautaContent(reviewingArticle.id, { mediaType: 'video' });
+                    }}
+                    className={`inline-flex items-center gap-1 rounded px-2.5 py-1 cursor-pointer ${
+                      reviewingArticle.mediaType === 'video' || isVideoArticle(reviewingArticle)
+                        ? 'bg-[#FF6600] text-white'
+                        : 'text-zinc-400'
+                    }`}
+                  >
+                    <Film className="h-3 w-3" aria-hidden="true" />
+                    Matéria em Vídeo
+                  </button>
+                </div>
+              </div>
+
+              {(reviewingArticle.mediaType === 'video' || isVideoArticle(reviewingArticle)) && (
+                <div className="space-y-2.5">
+                  <div className="flex flex-wrap gap-2">
+                    <input
+                      type="text"
+                      value={reviewingArticle.videoUrl || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const ytThumb = getYouTubeThumbnailUrl(val);
+                        const nextImg = reviewingArticle.imageUrl || ytThumb || undefined;
+                        setReviewingArticle({
+                          ...reviewingArticle,
+                          mediaType: 'video',
+                          videoUrl: val,
+                          imageUrl: nextImg,
+                        });
+                        updatePautaContent(reviewingArticle.id, {
+                          mediaType: 'video',
+                          videoUrl: val.trim() || undefined,
+                          imageUrl: nextImg,
+                        });
+                      }}
+                      placeholder="Link YouTube, Vimeo, Reels ou MP4 direto..."
+                      className="flex-1 min-w-[200px] rounded-lg border border-[#FF6600]/40 bg-[#121215] px-3 py-2 text-xs text-white focus:border-[#FF6600] focus:outline-none"
+                    />
+                    <label className="inline-flex items-center gap-1.5 rounded-lg border border-[#FF6600]/40 bg-[#FF6600]/10 px-3 py-2 text-xs font-medium text-[#FF6600] cursor-pointer shrink-0">
+                      <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                      Subir Vídeo
+                      <input
+                        type="file"
+                        accept="video/mp4,video/webm,video/quicktime"
+                        className="hidden"
+                        onChange={(e) =>
+                          handleVideoUpload(e, (url) => {
+                            setReviewingArticle({
+                              ...reviewingArticle,
+                              mediaType: 'video',
+                              videoUrl: url,
+                            });
+                            updatePautaContent(reviewingArticle.id, {
+                              mediaType: 'video',
+                              videoUrl: url,
+                            });
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
+
+                  {isVideoArticle(reviewingArticle) && (
+                    <div className="overflow-hidden rounded-lg border border-white/10 bg-black aspect-video max-h-56">
+                      {getVideoEmbedUrl(reviewingArticle.videoUrl) ? (
+                        <iframe
+                          src={getVideoEmbedUrl(reviewingArticle.videoUrl) || undefined}
+                          title={reviewingArticle.title}
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          allowFullScreen
+                          className="h-full w-full border-0"
+                        />
+                      ) : (
+                        <video
+                          controls
+                          playsInline
+                          poster={reviewingArticle.imageUrl}
+                          src={reviewingArticle.videoUrl}
+                          className="h-full w-full object-contain"
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="text"
+                  value={reviewingArticle.imageUrl || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setReviewingArticle({ ...reviewingArticle, imageUrl: val });
+                    updatePautaContent(reviewingArticle.id, { imageUrl: val.trim() || undefined });
+                  }}
+                  placeholder="URL da foto de capa / poster"
+                  className="flex-1 min-w-[200px] rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white focus:border-[#FF6600] focus:outline-none"
+                />
+                <label className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-zinc-200 cursor-pointer shrink-0">
+                  <Upload className="h-3.5 w-3.5 text-[#FF6600]" aria-hidden="true" />
+                  Foto Capa
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) =>
+                      handleImageUpload(e, (url) => {
+                        setReviewingArticle({ ...reviewingArticle, imageUrl: url });
+                        updatePautaContent(reviewingArticle.id, { imageUrl: url });
+                      })
+                    }
+                  />
+                </label>
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-4">

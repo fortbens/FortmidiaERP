@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Building2, LayoutDashboard, Newspaper } from 'lucide-react';
-import { FortMidiaProvider } from './context/FortMidiaContext';
+import { FortMidiaProvider, useFortMidia } from './context/FortMidiaContext';
+import { isSafeMediaUrl } from './utils/videoEmbed';
 import { Navbar } from './components/public/Navbar';
 import { HeroSection } from './components/public/HeroSection';
 import { NewsSection } from './components/public/NewsSection';
@@ -36,6 +37,41 @@ function readStoredPublicTheme(): PublicTheme {
     // Ignore storage access restrictions
   }
   return 'dark';
+}
+
+function DynamicFaviconSync({ view }: { view: AppRouteView }) {
+  const { siteSettings, newsPortalSettings } = useFortMidia();
+
+  useEffect(() => {
+    const candidate =
+      view === 'fortnews'
+        ? newsPortalSettings.faviconUrl || newsPortalSettings.logoUrl
+        : siteSettings.faviconUrl || siteSettings.logoUrl;
+
+    if (!candidate || !isSafeMediaUrl(candidate)) return;
+
+    const upsertLink = (rel: string) => {
+      let link = document.querySelector<HTMLLinkElement>(`link[rel="${rel}"]`);
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = rel;
+        document.head.appendChild(link);
+      }
+      link.href = candidate;
+    };
+
+    upsertLink('icon');
+    upsertLink('shortcut icon');
+    upsertLink('apple-touch-icon');
+  }, [
+    view,
+    siteSettings.faviconUrl,
+    siteSettings.logoUrl,
+    newsPortalSettings.faviconUrl,
+    newsPortalSettings.logoUrl,
+  ]);
+
+  return null;
 }
 
 function detectDomainContext(): DomainContext {
@@ -232,6 +268,7 @@ export default function App() {
 
   return (
     <FortMidiaProvider>
+      <DynamicFaviconSync view={view} />
       {mapsQuotaExceeded && (
         <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
           <span>

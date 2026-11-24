@@ -31,6 +31,12 @@ import {
 } from '../../types/fortmidia';
 import { MediaFrame } from '../MediaFrame';
 import { FortNewsLogo, OFFICIAL_FORTNEWS_LOGO_URL } from '../FortMidiaLogo';
+import {
+  getArticlePosterUrl,
+  getVideoEmbedUrl,
+  getYouTubeThumbnailUrl,
+  isVideoArticle,
+} from '../../utils/videoEmbed';
 
 interface PortalNewsEditorModuleProps {
   onOpenFortNewsPortal: () => void;
@@ -178,8 +184,8 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     setReporter(art.reporter);
     setSummary(art.summary);
     setBody(art.body);
-    setImageUrl(art.imageUrl || '/assets/aistudio/Microfone_dc305011.jpg');
-    setMediaType(art.mediaType || 'image');
+    setImageUrl(art.imageUrl || getArticlePosterUrl(art) || '/assets/aistudio/Microfone_dc305011.jpg');
+    setMediaType(isVideoArticle(art) ? 'video' : art.mediaType || 'image');
     setVideoUrl(art.videoUrl || '');
     setPendingSources(art.sourceUrls || []);
     setPendingSocial(art.socialCreative);
@@ -272,6 +278,15 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
       { hour: '2-digit', minute: '2-digit' }
     )}`;
 
+    const trimmedVideo = videoUrl.trim();
+    const resolvedMediaType: 'image' | 'video' = trimmedVideo ? 'video' : mediaType;
+    const ytThumb = getYouTubeThumbnailUrl(trimmedVideo);
+    const isDefaultPreset = IMAGE_PRESETS.some((p) => p.url === imageUrl);
+    const resolvedImageUrl =
+      resolvedMediaType === 'video' && ytThumb && (!imageUrl.trim() || isDefaultPreset)
+        ? ytThumb
+        : imageUrl.trim() || ytThumb || undefined;
+
     if (editingPautaId) {
       updatePautaContent(editingPautaId, {
         title: title.trim(),
@@ -280,9 +295,9 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
         reporter: reporter.trim() || 'Redação Portal FortNews',
         summary: summary.trim(),
         body: body.trim() || summary.trim(),
-        imageUrl,
-        mediaType,
-        videoUrl: mediaType === 'video' ? videoUrl.trim() || undefined : undefined,
+        imageUrl: resolvedImageUrl,
+        mediaType: resolvedMediaType,
+        videoUrl: resolvedMediaType === 'video' ? trimmedVideo || undefined : undefined,
         sourceUrls: pendingSources,
         socialCreative: pendingSocial,
         ...(targetMode === 'publish_now'
@@ -299,7 +314,9 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
       });
       flash(
         targetMode === 'publish_now'
-          ? 'Matéria atualizada e PUBLICADA no Portal FortNews e no site FortMídia!'
+          ? resolvedMediaType === 'video'
+            ? 'Matéria em VÍDEO atualizada e PUBLICADA no Portal FortNews e no site FortMídia!'
+            : 'Matéria atualizada e PUBLICADA no Portal FortNews e no site FortMídia!'
           : 'Edições salvas e enviadas para aprovação do Redator-Chefe.'
       );
       resetEditor();
@@ -321,9 +338,9 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
       publishedAt: targetMode === 'publish_now' ? nowStamp : undefined,
       summary: summary.trim(),
       body: body.trim() || summary.trim(),
-      imageUrl,
-      mediaType,
-      videoUrl: mediaType === 'video' ? videoUrl.trim() || undefined : undefined,
+      imageUrl: resolvedImageUrl,
+      mediaType: resolvedMediaType,
+      videoUrl: resolvedMediaType === 'video' ? trimmedVideo || undefined : undefined,
       aiGenerated: isAiOrigin,
       sourceUrls: pendingSources.length > 0 ? pendingSources : undefined,
       socialCreative: pendingSocial,
@@ -331,7 +348,9 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
 
     flash(
       targetMode === 'publish_now'
-        ? 'Nova matéria publicada imediatamente no Portal Jornal FortNews!'
+        ? resolvedMediaType === 'video'
+          ? 'Nova matéria em VÍDEO publicada imediatamente no Portal Jornal FortNews e na FortMídia!'
+          : 'Nova matéria publicada imediatamente no Portal Jornal FortNews!'
         : 'Matéria incluída e enviada para fila do Redator-Chefe.'
     );
     resetEditor();
@@ -707,15 +726,38 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
 
             {mediaType === 'video' && (
               <div className="space-y-2 border-b border-white/10 pb-3">
-                <label className="block text-[11px] text-[#D4AF37]">
-                  Arquivo de Vídeo (MP4/WebM) ou Link YouTube
-                </label>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="block text-[11px] text-[#D4AF37]">
+                    Arquivo de Vídeo (MP4/WebM) ou Link YouTube / Vimeo / Reels
+                  </label>
+                  {getYouTubeThumbnailUrl(videoUrl) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const thumb = getYouTubeThumbnailUrl(videoUrl);
+                        if (thumb) setImageUrl(thumb);
+                      }}
+                      className="text-[11px] font-medium text-[#FF6600] hover:underline cursor-pointer"
+                    >
+                      Usar capa do YouTube
+                    </button>
+                  )}
+                </div>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={videoUrl}
-                    onChange={(e) => setVideoUrl(e.target.value)}
-                    placeholder="https://youtube.com/watch?v=... ou arquivo MP4"
+                    onChange={(e) => {
+                      const nextVal = e.target.value;
+                      setVideoUrl(nextVal);
+                      if (nextVal.trim()) setMediaType('video');
+                      const ytThumb = getYouTubeThumbnailUrl(nextVal);
+                      const isPreset = IMAGE_PRESETS.some((p) => p.url === imageUrl);
+                      if (ytThumb && (!imageUrl.trim() || isPreset)) {
+                        setImageUrl(ytThumb);
+                      }
+                    }}
+                    placeholder="https://youtube.com/watch?v=..., Vimeo, Reels ou MP4"
                     className="flex-1 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white"
                   />
                   <label className="inline-flex items-center gap-1.5 rounded-lg border border-[#FF6600]/40 bg-[#FF6600]/10 px-3 py-2 text-xs font-medium text-[#FF6600] cursor-pointer shrink-0">
@@ -846,20 +888,31 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
                   className="rounded-xl border border-white/10 bg-[#0A0A0A] p-4 space-y-3"
                 >
                   <div className="flex gap-3 min-w-0">
-                    {art.imageUrl && (
-                      <div className="relative h-16 w-20 shrink-0 overflow-hidden rounded-lg border border-white/10">
-                        <MediaFrame
-                          src={art.imageUrl}
-                          alt={art.title}
-                          className="h-full w-full object-cover"
-                        />
-                        {art.mediaType === 'video' && (
-                          <span className="absolute bottom-1 left-1 rounded bg-black/80 px-1 py-0.5 text-[9px] font-bold text-[#FF6600]">
-                            ▶ VÍDEO
-                          </span>
-                        )}
-                      </div>
-                    )}
+                    {(() => {
+                      const artIsVideo = isVideoArticle(art);
+                      const artPoster = getArticlePosterUrl(art);
+                      if (!artPoster && !artIsVideo) return null;
+                      return (
+                        <div className="relative h-16 w-20 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-zinc-950">
+                          {artPoster ? (
+                            <MediaFrame
+                              src={artPoster}
+                              alt={art.title}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-zinc-900 to-black text-[#FF6600]">
+                              <Film className="h-5 w-5" aria-hidden="true" />
+                            </div>
+                          )}
+                          {artIsVideo && (
+                            <span className="absolute bottom-1 left-1 rounded bg-black/80 px-1 py-0.5 text-[9px] font-bold text-[#FF6600]">
+                              ▶ VÍDEO
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
                         <span
@@ -1023,16 +1076,24 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
                 Revisão Editorial: {chiefName}
               </div>
 
-              {mediaType === 'video' && videoUrl.trim() ? (
+              {(mediaType === 'video' || Boolean(videoUrl.trim())) && videoUrl.trim() ? (
                 <div className="overflow-hidden rounded-xl border border-zinc-200 bg-black aspect-video">
-                  {videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be') ? (
-                    <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4 text-center text-white">
-                      <Film className="h-8 w-8 text-[#fa6607]" />
-                      <div className="text-xs font-semibold">Vídeo YouTube vinculado</div>
-                      <div className="text-[11px] text-zinc-400 break-all">{videoUrl}</div>
-                    </div>
+                  {getVideoEmbedUrl(videoUrl) ? (
+                    <iframe
+                      src={getVideoEmbedUrl(videoUrl) || undefined}
+                      title={title || 'Pré-visualização do vídeo'}
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                      className="h-full w-full border-0"
+                    />
                   ) : (
-                    <video src={videoUrl} poster={imageUrl} controls className="h-full w-full object-contain" />
+                    <video
+                      src={videoUrl}
+                      poster={imageUrl || getYouTubeThumbnailUrl(videoUrl) || undefined}
+                      controls
+                      playsInline
+                      className="h-full w-full object-contain"
+                    />
                   )}
                 </div>
               ) : (

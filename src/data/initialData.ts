@@ -218,6 +218,7 @@ export const INITIAL_SITE_SETTINGS: SiteSettings = {
   brandName: 'Grupo',
   brandHighlight: 'FortMídia',
   logoUrl: '/assets/aistudio/Logo_FortM_dia_ded2b7d7.png',
+  faviconUrl: '/assets/aistudio/Logo_FortM_dia_ded2b7d7.png',
   logoMode: 'image',
   logoHeightPx: 52,
   primaryColor: '#fa6607',
@@ -228,6 +229,10 @@ export const INITIAL_SITE_SETTINGS: SiteSettings = {
   heroSubheadline:
     'O ecossistema multimídia que une jornalismo ágil 24/7 no Portal FortNews, rede de mídia exterior OOH, estúdio próprio de podcasts e consultoria de marca em Franco da Rocha, Caieiras, Francisco Morato, Cajamar e Mairiporã.',
   heroPrimaryCta: 'Explorar Cotas Comerciais',
+  heroVideoUrl: '/assets/aistudio/Create_animation_video_for_logo_27da8ac9_1080p_0c3f73f9.mp4',
+  heroVideoPosterUrl: '/assets/aistudio/Gemini_Generated_Image_ov5owov5owov5owo_7f33ef20.jpg',
+  heroVideoTitle: 'FortMídia & Grupo FortNews · Estúdio Central CIMBAJU',
+  siteVideos: [],
   newsPortalUrl: 'https://jornalfortnews.com.br',
   contactEmail: 'comercial@fortmidia.com.br',
   siteDomain: 'fortmidia.com.br',
@@ -1530,6 +1535,7 @@ export const INITIAL_NEWS_PORTAL_SETTINGS: NewsPortalSettings = {
   secondaryColor: '#d95300',
   domain: 'jornalfortnews.com.br',
   logoUrl: '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__9741accd.png',
+  faviconUrl: '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__9741accd.png',
   logoHeightPx: 52,
   logoFitMode: 'wide',
   breakingTickerEnabled: true,
@@ -1550,6 +1556,11 @@ export const INITIAL_NEWS_PORTAL_SETTINGS: NewsPortalSettings = {
   showAds: true,
   footerText: 'Jornal FortNews · Núcleo de Jornalismo do Grupo FortMídia · Região do CIMBAJU',
   enabledSeals: [...NEWS_SEALS],
+  featuredVideoEnabled: true,
+  featuredVideoTitle: 'FortNews TV · Jornalismo & Estúdio CIMBAJU',
+  featuredVideoUrl: '/assets/aistudio/Create_animation_video_for_logo_27da8ac9_1080p_0c3f73f9.mp4',
+  featuredVideoPosterUrl: '/assets/aistudio/Microfone_dc305011.jpg',
+  portalVideos: [],
 };
 
 export const ALL_ADMIN_TABS: AdminTabId[] = [

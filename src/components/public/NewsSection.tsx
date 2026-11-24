@@ -1,9 +1,15 @@
-import React, { useState } from 'react';
-import { ArrowUpRight, BookOpen, Play, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { ArrowUpRight, BookOpen, Film, Play, Tv, X } from 'lucide-react';
 import { NEWS_SEALS, NEWS_TERRITORIES } from '../../data/initialData';
 import { useFortMidia } from '../../context/FortMidiaContext';
 import { CimbajuCity, EditorialPauta, NewsSeal } from '../../types/fortmidia';
-import { getVideoEmbedUrl } from '../../utils/videoEmbed';
+import {
+  getArticlePosterUrl,
+  getVideoEmbedUrl,
+  getYouTubeThumbnailUrl,
+  isSafeMediaUrl,
+  isVideoArticle,
+} from '../../utils/videoEmbed';
 import { MediaFrame } from '../MediaFrame';
 import { SiteAdSlot } from './SiteAdSlot';
 
@@ -16,6 +22,7 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
   const [sealFilter, setSealFilter] = useState<'Todas' | NewsSeal>('Todas');
   const [cityFilter, setCityFilter] = useState<'Todas' | CimbajuCity>('Todas');
   const [readingArticle, setReadingArticle] = useState<EditorialPauta | null>(null);
+  const [activeShowcaseVideoId, setActiveShowcaseVideoId] = useState<string | null>(null);
 
   const fortMidiaSiteBanners = siteAdBanners
     .filter((b) => b.active && (b.siteTarget === 'ambos' || b.siteTarget === 'fortmidia'))
@@ -50,6 +57,53 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
 
   const leadArticle = filtered[0];
   const secondaryArticles = filtered.slice(1);
+
+  const siteVideoShowcase = useMemo(() => {
+    const items: Array<{
+      id: string;
+      title: string;
+      description?: string;
+      videoUrl: string;
+      posterUrl?: string;
+      badge: string;
+      meta: string;
+      article?: EditorialPauta;
+    }> = [];
+
+    publishedNews
+      .filter((p) => isVideoArticle(p))
+      .forEach((art) => {
+        items.push({
+          id: `art-${art.id}`,
+          title: art.title,
+          description: art.summary,
+          videoUrl: art.videoUrl!.trim(),
+          posterUrl: getArticlePosterUrl(art),
+          badge: art.seal,
+          meta: `${art.city} · ${art.publishedAt || art.deadline}`,
+          article: art,
+        });
+      });
+
+    (siteSettings.siteVideos || [])
+      .filter((v) => v.active && isSafeMediaUrl(v.videoUrl))
+      .forEach((vid) => {
+        items.push({
+          id: `site-${vid.id}`,
+          title: vid.title,
+          description: vid.description,
+          videoUrl: vid.videoUrl.trim(),
+          posterUrl: vid.posterUrl || getYouTubeThumbnailUrl(vid.videoUrl) || undefined,
+          badge: vid.category || 'FortMídia TV',
+          meta: vid.createdAt || 'Vídeo Oficial',
+        });
+      });
+
+    return items;
+  }, [publishedNews, siteSettings.siteVideos]);
+
+  const activeShowcaseVideo =
+    siteVideoShowcase.find((v) => v.id === activeShowcaseVideoId) ?? siteVideoShowcase[0] ?? null;
 
   const sealTone = (seal: NewsSeal) => {
     if (seal === 'Break News' || seal === 'Urgente') return 'text-[#FF6600]';
@@ -215,21 +269,40 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
             {leadArticle && (
               <article className="glass-surface lg:col-span-7 overflow-hidden rounded-xl border border-white/10 flex flex-col justify-between min-w-0">
                 <div className="min-w-0">
-                  {leadArticle.imageUrl && (
-                    <div className="relative aspect-video w-full overflow-hidden border-b border-white/10 bg-[#141416]">
-                      <MediaFrame
-                        src={leadArticle.imageUrl}
-                        alt={leadArticle.title}
-                        className="h-full w-full object-cover"
-                      />
-                      {leadArticle.mediaType === 'video' && (
-                        <span className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-md bg-black/80 border border-white/20 px-2.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm">
-                          <Play className="h-3 w-3 fill-[#FF6600] text-[#FF6600]" aria-hidden="true" />
-                          VÍDEO
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  {(() => {
+                    const leadIsVideo = isVideoArticle(leadArticle);
+                    const leadPoster = getArticlePosterUrl(leadArticle);
+                    if (!leadPoster && !leadIsVideo) return null;
+                    return (
+                      <div
+                        onClick={() => setReadingArticle(leadArticle)}
+                        className="relative aspect-video w-full overflow-hidden border-b border-white/10 bg-[#141416] cursor-pointer"
+                      >
+                        {leadPoster ? (
+                          <MediaFrame
+                            src={leadPoster}
+                            alt={leadArticle.title}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-zinc-900 to-black text-white">
+                            <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#FF6600] text-white shadow-lg">
+                              <Play className="h-6 w-6 fill-white ml-0.5" aria-hidden="true" />
+                            </span>
+                            <span className="text-xs font-semibold text-zinc-300">
+                              Reportagem em Vídeo · Clique para assistir
+                            </span>
+                          </div>
+                        )}
+                        {leadIsVideo && (
+                          <span className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-md bg-black/80 border border-white/20 px-2.5 py-1 text-[11px] font-bold text-white backdrop-blur-sm">
+                            <Play className="h-3 w-3 fill-[#FF6600] text-[#FF6600]" aria-hidden="true" />
+                            VÍDEO
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="p-5 sm:p-6">
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <span className={`font-semibold ${sealTone(leadArticle.seal)}`}>
@@ -266,8 +339,17 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
                     className="inline-flex items-center gap-1.5 text-xs font-semibold hover:underline underline-offset-4 cursor-pointer whitespace-nowrap"
                     style={{ color: siteSettings.primaryColor }}
                   >
-                    <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
-                    Ler matéria completa
+                    {isVideoArticle(leadArticle) ? (
+                      <>
+                        <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                        Assistir e ler matéria
+                      </>
+                    ) : (
+                      <>
+                        <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                        Ler matéria completa
+                      </>
+                    )}
                   </button>
                 </div>
               </article>
@@ -291,21 +373,32 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
                       onClick={() => setReadingArticle(art)}
                       className="glass-surface flex gap-3 sm:gap-4 rounded-xl border border-white/10 p-3.5 sm:p-4 transition-colors hover:border-white/25 cursor-pointer min-w-0"
                     >
-                      {art.imageUrl && (
-                        <div className="relative h-20 w-24 sm:h-24 sm:w-28 shrink-0 overflow-hidden rounded-lg border border-white/10">
-                          <MediaFrame
-                            src={art.imageUrl}
-                            alt={art.title}
-                            className="h-full w-full object-cover"
-                          />
-                          {art.mediaType === 'video' && (
-                            <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-0.5 rounded bg-black/85 px-1.5 py-0.5 text-[9px] font-bold text-white">
-                              <Play className="h-2.5 w-2.5 fill-[#FF6600] text-[#FF6600]" aria-hidden="true" />
-                              VÍDEO
-                            </span>
-                          )}
-                        </div>
-                      )}
+                      {(() => {
+                        const artIsVideo = isVideoArticle(art);
+                        const artPoster = getArticlePosterUrl(art);
+                        if (!artPoster && !artIsVideo) return null;
+                        return (
+                          <div className="relative h-20 w-24 sm:h-24 sm:w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-zinc-950">
+                            {artPoster ? (
+                              <MediaFrame
+                                src={artPoster}
+                                alt={art.title}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-zinc-900 to-black text-[#FF6600]">
+                                <Play className="h-6 w-6 fill-[#FF6600]" aria-hidden="true" />
+                              </div>
+                            )}
+                            {artIsVideo && (
+                              <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-0.5 rounded bg-black/85 px-1.5 py-0.5 text-[9px] font-bold text-white">
+                                <Play className="h-2.5 w-2.5 fill-[#FF6600] text-[#FF6600]" aria-hidden="true" />
+                                VÍDEO
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                       <div className="min-w-0 flex-1 flex flex-col justify-between">
                         <div>
                           <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -343,6 +436,138 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
             </div>
           </div>
         )}
+
+        {/* Vídeos em Destaque · FortMídia & Matérias em Vídeo */}
+        {activeShowcaseVideo && (
+          <div className="mt-12 rounded-2xl border border-white/10 bg-[#121215] p-5 sm:p-6 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3.5">
+              <div className="flex items-center gap-2.5">
+                <span
+                  className="flex h-9 w-9 items-center justify-center rounded-lg text-white shrink-0"
+                  style={{ backgroundColor: siteSettings.primaryColor }}
+                >
+                  <Tv className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div>
+                  <h3 className="font-display text-base sm:text-lg font-bold text-white">
+                    Vídeos em Destaque · FortMídia &amp; Matérias em Vídeo
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    Reportagens em vídeo publicadas pela redação e vídeos institucionais do Grupo FortMídia
+                  </p>
+                </div>
+              </div>
+              <span className="font-mono text-xs text-zinc-400 tabular-nums">
+                {siteVideoShowcase.length} vídeo(s)
+              </span>
+            </div>
+
+            <div className="grid gap-5 lg:grid-cols-12">
+              <div className="lg:col-span-8 space-y-3">
+                <div className="overflow-hidden rounded-xl border border-white/10 bg-black aspect-video">
+                  {getVideoEmbedUrl(activeShowcaseVideo.videoUrl) ? (
+                    <iframe
+                      key={activeShowcaseVideo.id}
+                      src={getVideoEmbedUrl(activeShowcaseVideo.videoUrl) || undefined}
+                      title={activeShowcaseVideo.title}
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                      className="h-full w-full border-0"
+                    />
+                  ) : (
+                    <video
+                      key={activeShowcaseVideo.id}
+                      controls
+                      playsInline
+                      poster={activeShowcaseVideo.posterUrl}
+                      src={activeShowcaseVideo.videoUrl}
+                      className="h-full w-full bg-black object-contain"
+                    />
+                  )}
+                </div>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span
+                        className="font-semibold"
+                        style={{ color: siteSettings.primaryColor }}
+                      >
+                        {activeShowcaseVideo.badge}
+                      </span>
+                      <span className="text-zinc-600">·</span>
+                      <span className="text-zinc-400">{activeShowcaseVideo.meta}</span>
+                    </div>
+                    <h4 className="mt-1 font-display text-lg font-bold text-white leading-snug">
+                      {activeShowcaseVideo.title}
+                    </h4>
+                    {activeShowcaseVideo.description && (
+                      <p className="mt-1 text-xs text-zinc-400 line-clamp-2">
+                        {activeShowcaseVideo.description}
+                      </p>
+                    )}
+                  </div>
+                  {activeShowcaseVideo.article && (
+                    <button
+                      type="button"
+                      onClick={() => setReadingArticle(activeShowcaseVideo.article!)}
+                      style={{ backgroundColor: siteSettings.primaryColor }}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90 cursor-pointer shrink-0"
+                    >
+                      <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                      Abrir matéria completa
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="lg:col-span-4 space-y-2 max-h-[380px] overflow-y-auto pr-1">
+                {siteVideoShowcase.map((vid) => {
+                  const isCurrent = vid.id === activeShowcaseVideo.id;
+                  return (
+                    <button
+                      key={vid.id}
+                      type="button"
+                      onClick={() => setActiveShowcaseVideoId(vid.id)}
+                      className={`w-full flex gap-3 rounded-xl border p-2.5 text-left transition-colors cursor-pointer ${
+                        isCurrent
+                          ? 'border-[#FF6600] bg-[#FF6600]/15'
+                          : 'border-white/10 bg-[#0A0A0A] hover:border-white/25'
+                      }`}
+                    >
+                      <div className="relative h-14 w-24 shrink-0 overflow-hidden rounded-lg bg-black">
+                        {vid.posterUrl ? (
+                          <MediaFrame
+                            src={vid.posterUrl}
+                            alt={vid.title}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[#FF6600]">
+                            <Film className="h-4 w-4" aria-hidden="true" />
+                          </div>
+                        )}
+                        <span className="absolute bottom-1 right-1 rounded bg-black/80 px-1 py-0.5 text-[9px] font-bold text-white">
+                          ▶
+                        </span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] font-semibold text-[#FF6600] truncate">
+                          {vid.badge}
+                        </div>
+                        <div className="mt-0.5 text-xs font-semibold text-white line-clamp-2 leading-snug">
+                          {vid.title}
+                        </div>
+                        <div className="mt-1 text-[10px] text-zinc-400 truncate">
+                          {vid.meta}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Article Reader Modal */}
@@ -355,9 +580,9 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
         >
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-white/15 bg-[#121215] shadow-2xl">
             {(() => {
-              const isVideo =
-                readingArticle.mediaType === 'video' && Boolean(readingArticle.videoUrl?.trim());
+              const isVideo = isVideoArticle(readingArticle);
               const embedUrl = isVideo ? getVideoEmbedUrl(readingArticle.videoUrl) : null;
+              const posterUrl = getArticlePosterUrl(readingArticle);
 
               if (isVideo) {
                 return (
@@ -389,7 +614,7 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
                         <video
                           controls
                           playsInline
-                          poster={readingArticle.imageUrl}
+                          poster={posterUrl}
                           src={readingArticle.videoUrl}
                           className="h-full w-full bg-black object-contain"
                         />
@@ -423,19 +648,18 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
             })()}
 
             <div className="p-6 sm:p-8">
-              {!(readingArticle.mediaType === 'video' && readingArticle.videoUrl?.trim()) &&
-                !readingArticle.imageUrl && (
-                  <div className="flex justify-end mb-2">
-                    <button
-                      type="button"
-                      onClick={() => setReadingArticle(null)}
-                      aria-label="Fechar leitura"
-                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-zinc-300 hover:bg-white/5 cursor-pointer"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
+              {!isVideoArticle(readingArticle) && !readingArticle.imageUrl && (
+                <div className="flex justify-end mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setReadingArticle(null)}
+                    aria-label="Fechar leitura"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-zinc-300 hover:bg-white/5 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
 
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className={`font-semibold ${sealTone(readingArticle.seal)}`}>

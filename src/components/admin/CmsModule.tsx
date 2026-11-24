@@ -5,6 +5,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  Film,
   GitBranch,
   Globe,
   Image as ImageIcon,
@@ -26,8 +27,16 @@ import { aiApi } from '../../services/api';
 import { GalleryCategory, NewsSeal, QuotaCategory, SiteCmsPreset } from '../../types/fortmidia';
 import { MediaFrame } from '../MediaFrame';
 import { FortMidiaLogo } from '../FortMidiaLogo';
+import { CmsFaviconVideosTab } from './CmsFaviconVideosTab';
 
-type CmsSubTab = 'identidade' | 'portal_noticias' | 'servicos' | 'galeria' | 'popup' | 'deploy_sites';
+type CmsSubTab =
+  | 'identidade'
+  | 'portal_noticias'
+  | 'favicon_videos'
+  | 'servicos'
+  | 'galeria'
+  | 'popup'
+  | 'deploy_sites';
 
 interface CmsModuleProps {
   onPreviewPortal: () => void;
@@ -307,6 +316,18 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
         </button>
         <button
           type="button"
+          onClick={() => setSubTab('favicon_videos')}
+          className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-medium cursor-pointer ${
+            subTab === 'favicon_videos'
+              ? 'bg-[#fa6607] text-white'
+              : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <Film className="h-3.5 w-3.5" aria-hidden="true" />
+          Favicon &amp; Vídeos (Sites)
+        </button>
+        <button
+          type="button"
           onClick={() => setSubTab('servicos')}
           className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-medium cursor-pointer ${
             subTab === 'servicos'
@@ -481,6 +502,14 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
             ))}
           </div>
         </div>
+      )}
+
+      {subTab === 'favicon_videos' && (
+        <CmsFaviconVideosTab
+          onNotice={flashNotice}
+          onPreviewFortMidia={onPreviewPortal}
+          onPreviewFortNews={onOpenFortNewsPortal}
+        />
       )}
 
       {/* TAB 1: IDENTIDADE, LOGO, CORES, CONTATO & WHATSAPP */}

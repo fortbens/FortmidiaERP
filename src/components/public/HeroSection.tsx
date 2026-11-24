@@ -7,6 +7,11 @@ import {
   isOfficialSquareFortMidiaLogo,
   OFFICIAL_FORTMIDIA_LOGO_URL,
 } from '../FortMidiaLogo';
+import {
+  getVideoEmbedUrl,
+  getYouTubeThumbnailUrl,
+  isSafeMediaUrl,
+} from '../../utils/videoEmbed';
 
 interface HeroSectionProps {
   onOpenProposal: (defaultQuota?: string) => void;
@@ -96,15 +101,43 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onOpenProposal, onOpen
             <div className="relative flex-1 overflow-hidden rounded-xl border border-white/10 bg-[#121214]">
               <div className="aspect-video w-full h-full min-h-[210px] sm:min-h-[280px] relative">
                 {mediaMode === 'video' ? (
-                  <video
-                    src="/assets/aistudio/Create_animation_video_for_logo_27da8ac9_1080p_0c3f73f9.mp4"
-                    poster="/assets/aistudio/Gemini_Generated_Image_ov5owov5owov5owo_7f33ef20.jpg"
-                    controls
-                    muted
-                    loop
-                    playsInline
-                    className="h-full w-full object-cover"
-                  />
+                  (() => {
+                    const heroVideoSrc =
+                      siteSettings.heroVideoUrl?.trim() && isSafeMediaUrl(siteSettings.heroVideoUrl)
+                        ? siteSettings.heroVideoUrl.trim()
+                        : '/assets/aistudio/Create_animation_video_for_logo_27da8ac9_1080p_0c3f73f9.mp4';
+                    const heroEmbedUrl = getVideoEmbedUrl(heroVideoSrc);
+                    const heroPosterSrc =
+                      siteSettings.heroVideoPosterUrl?.trim() &&
+                      isSafeMediaUrl(siteSettings.heroVideoPosterUrl)
+                        ? siteSettings.heroVideoPosterUrl.trim()
+                        : getYouTubeThumbnailUrl(heroVideoSrc) ||
+                          '/assets/aistudio/Gemini_Generated_Image_ov5owov5owov5owo_7f33ef20.jpg';
+
+                    if (heroEmbedUrl) {
+                      return (
+                        <iframe
+                          src={heroEmbedUrl}
+                          title={siteSettings.heroVideoTitle || 'Filme Institucional FortMídia'}
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          allowFullScreen
+                          className="h-full w-full border-0"
+                        />
+                      );
+                    }
+                    return (
+                      <video
+                        key={heroVideoSrc}
+                        src={heroVideoSrc}
+                        poster={heroPosterSrc}
+                        controls
+                        muted
+                        loop
+                        playsInline
+                        className="h-full w-full object-cover"
+                      />
+                    );
+                  })()
                 ) : isOfficialSquareFortMidiaLogo(siteSettings.logoUrl) ? (
                   <div className="h-full w-full bg-white flex items-center justify-center p-6 sm:p-10">
                     <img
@@ -127,7 +160,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onOpenProposal, onOpen
             {/* Clean Segmented Switch below visual */}
             <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-4">
               <span className="text-xs text-zinc-400 truncate">
-                FortMídia & Grupo FortNews · Estúdio Central CIMBAJU
+                {siteSettings.heroVideoTitle || 'FortMídia & Grupo FortNews · Estúdio Central CIMBAJU'}
               </span>
               <div className="inline-flex w-full sm:w-auto items-center gap-1 rounded-lg border border-white/10 bg-[#141416] p-1">
                 <button
