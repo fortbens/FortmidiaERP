@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Bookmark,
   Check,
   Download,
   Film,
@@ -9,8 +10,12 @@ import {
   Newspaper,
   Pause,
   Play,
+  Plus,
   RotateCcw,
+  Save,
   Square,
+  Star,
+  Trash2,
   Upload,
   Video,
   Volume2,
@@ -18,7 +23,6 @@ import {
 } from 'lucide-react';
 import { NEWS_TERRITORIES } from '../../data/initialData';
 import { useFortMidia } from '../../context/FortMidiaContext';
-import { OFFICIAL_FORTNEWS_LOGO_URL } from '../FortMidiaLogo';
 import { PautaSearchPicker } from './PautaSearchPicker';
 import {
   exportFramedVideo,
@@ -27,6 +31,235 @@ import {
 } from '../../utils/videoFrameExporter';
 
 export type VideoFrameTemplate = 'reportagem_vertical' | 'news_horizontal';
+
+export const OFFICIAL_FORTNEWS_VECTOR_LOGO_URL =
+  '/assets/aistudio/Logotipo_FortNews_vetorizado__9__b9ef51c4.png';
+
+const VIDEO_FRAME_PRESETS_KEY = 'fortnews_video_frame_presets_v1';
+const VIDEO_FRAME_DEFAULT_PRESET_KEY = 'fortnews_video_frame_default_preset_v1';
+
+interface VideoFramePreset {
+  id: string;
+  name: string;
+  builtIn?: boolean;
+  template: VideoFrameTemplate;
+  accentColor: string;
+  logoUrl: string;
+  logoScale: number;
+  reportagemTitle: string;
+  reportagemBottomLabel: string;
+  reportagemCityTag: string;
+  topHeadline: string;
+  cityTag: string;
+  bottomHeadline: string;
+  leadText: string;
+  groupLabel: string;
+  portalUrl: string;
+  socialHandle: string;
+  sloganText: string;
+  showViewfinder: boolean;
+  mediaFit: 'cover' | 'contain';
+  mediaZoom: number;
+  mediaOffsetY: number;
+}
+
+const BUILTIN_VIDEO_FRAME_PRESETS: VideoFramePreset[] = [
+  {
+    id: 'builtin-fortnews-oficial',
+    name: 'FortNews Oficial',
+    builtIn: true,
+    template: 'reportagem_vertical',
+    accentColor: '#fa6607',
+    logoUrl: OFFICIAL_FORTNEWS_VECTOR_LOGO_URL,
+    logoScale: 105,
+    reportagemTitle: 'COBERTURA EXCLUSIVA\nMATÉRIA EM VÍDEO',
+    reportagemBottomLabel: 'REPORTAGEM',
+    reportagemCityTag: 'CIMBAJU',
+    topHeadline: 'MEGAOPERAÇÃO\nDA PM',
+    cityTag: 'MAIRIPORÃ',
+    bottomHeadline:
+      'FORÇA TÁTICA DESARTICULA LABORATÓRIO DO TRÁFICO E APREENDE 1,3 TONELADA DE DROGAS E ARMAS EM MAIRIPORÃ',
+    leadText:
+      'A Polícia Militar do Estado de São Paulo, por meio da equipe de Força Tática do 26º BPM/M, desmantelou uma refinaria clandestina de entorpecentes na noite do último sábado...',
+    groupLabel: 'Grupo FortNews',
+    portalUrl: 'www.jornalfortnews.com.br',
+    socialHandle: '@fortnews_',
+    sloganText: 'INFORMAÇÃO QUE CONECTA VOCÊ',
+    showViewfinder: true,
+    mediaFit: 'cover',
+    mediaZoom: 100,
+    mediaOffsetY: 50,
+  },
+  {
+    id: 'builtin-plantao-urgente',
+    name: 'Plantão Urgente',
+    builtIn: true,
+    template: 'reportagem_vertical',
+    accentColor: '#DC2626',
+    logoUrl: OFFICIAL_FORTNEWS_VECTOR_LOGO_URL,
+    logoScale: 110,
+    reportagemTitle: 'PLANTÃO URGENTE\nÚLTIMAS INFORMAÇÕES',
+    reportagemBottomLabel: 'PLANTÃO',
+    reportagemCityTag: 'CIMBAJU',
+    topHeadline: 'PLANTÃO\nURGENTE',
+    cityTag: 'CIMBAJU',
+    bottomHeadline: 'ATUALIZAÇÃO EM TEMPO REAL DA REDAÇÃO DO PORTAL JORNAL FORTNEWS',
+    leadText: 'Acompanhe os detalhes completos em tempo real no Portal Jornal FortNews.',
+    groupLabel: 'Grupo FortNews',
+    portalUrl: 'www.jornalfortnews.com.br',
+    socialHandle: '@fortnews_',
+    sloganText: 'INFORMAÇÃO QUE CONECTA VOCÊ',
+    showViewfinder: true,
+    mediaFit: 'cover',
+    mediaZoom: 100,
+    mediaOffsetY: 50,
+  },
+  {
+    id: 'builtin-especial-dourado',
+    name: 'Especial CIMBAJU',
+    builtIn: true,
+    template: 'reportagem_vertical',
+    accentColor: '#D4AF37',
+    logoUrl: OFFICIAL_FORTNEWS_VECTOR_LOGO_URL,
+    logoScale: 105,
+    reportagemTitle: 'ENTREVISTA ESPECIAL\nCOBERTURA REGIONAL',
+    reportagemBottomLabel: 'EXCLUSIVO',
+    reportagemCityTag: 'CIMBAJU',
+    topHeadline: 'COBERTURA\nESPECIAL',
+    cityTag: 'CIMBAJU',
+    bottomHeadline: 'REPORTAGEM ESPECIAL DO GRUPO FORTNEWS PARA TODA A REGIÃO DO CIMBAJU',
+    leadText: 'Assista ao conteúdo completo nas plataformas oficiais do Grupo FortNews.',
+    groupLabel: 'Grupo FortNews',
+    portalUrl: 'www.jornalfortnews.com.br',
+    socialHandle: '@fortnews_',
+    sloganText: 'INFORMAÇÃO QUE CONECTA VOCÊ',
+    showViewfinder: true,
+    mediaFit: 'cover',
+    mediaZoom: 100,
+    mediaOffsetY: 50,
+  },
+  {
+    id: 'builtin-news-horizontal',
+    name: 'News Horizontal',
+    builtIn: true,
+    template: 'news_horizontal',
+    accentColor: '#fa6607',
+    logoUrl: OFFICIAL_FORTNEWS_VECTOR_LOGO_URL,
+    logoScale: 105,
+    reportagemTitle: 'COBERTURA EXCLUSIVA\nMATÉRIA EM VÍDEO',
+    reportagemBottomLabel: 'REPORTAGEM',
+    reportagemCityTag: 'CIMBAJU',
+    topHeadline: 'MEGAOPERAÇÃO\nDA PM',
+    cityTag: 'MAIRIPORÃ',
+    bottomHeadline:
+      'FORÇA TÁTICA DESARTICULA LABORATÓRIO DO TRÁFICO E APREENDE 1,3 TONELADA DE DROGAS E ARMAS EM MAIRIPORÃ',
+    leadText:
+      'A Polícia Militar do Estado de São Paulo, por meio da equipe de Força Tática do 26º BPM/M, desmantelou uma refinaria clandestina de entorpecentes na noite do último sábado...',
+    groupLabel: 'Grupo FortNews',
+    portalUrl: 'www.jornalfortnews.com.br',
+    socialHandle: '@fortnews_',
+    sloganText: 'INFORMAÇÃO QUE CONECTA VOCÊ',
+    showViewfinder: true,
+    mediaFit: 'cover',
+    mediaZoom: 100,
+    mediaOffsetY: 50,
+  },
+];
+
+function trimTransparentImage(img: HTMLImageElement): HTMLCanvasElement | null {
+  try {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (!w || !h) return null;
+
+    // Scan on a manageable resolution for instant speed, then crop from full-res image
+    const maxScan = 512;
+    const scanScale = Math.min(1, maxScan / Math.max(w, h));
+    const sw = Math.max(1, Math.round(w * scanScale));
+    const sh = Math.max(1, Math.round(h * scanScale));
+
+    const scanCanvas = document.createElement('canvas');
+    scanCanvas.width = sw;
+    scanCanvas.height = sh;
+    const sctx = scanCanvas.getContext('2d', { willReadFrequently: true });
+    if (!sctx) return null;
+    sctx.drawImage(img, 0, 0, sw, sh);
+    const data = sctx.getImageData(0, 0, sw, sh).data;
+
+    let minX = sw;
+    let minY = sh;
+    let maxX = 0;
+    let maxY = 0;
+    let found = false;
+
+    for (let y = 0; y < sh; y++) {
+      for (let x = 0; x < sw; x++) {
+        const a = data[(y * sw + x) * 4 + 3];
+        if (a > 12) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+          found = true;
+        }
+      }
+    }
+
+    if (!found || maxX <= minX || maxY <= minY) return null;
+
+    const pad = 4;
+    const sx = Math.max(0, Math.floor(minX / scanScale) - pad);
+    const sy = Math.max(0, Math.floor(minY / scanScale) - pad);
+    const ex = Math.min(w, Math.ceil((maxX + 1) / scanScale) + pad);
+    const ey = Math.min(h, Math.ceil((maxY + 1) / scanScale) + pad);
+    const cw = Math.max(1, ex - sx);
+    const ch = Math.max(1, ey - sy);
+
+    const out = document.createElement('canvas');
+    out.width = cw;
+    out.height = ch;
+    const octx = out.getContext('2d');
+    if (!octx) return null;
+    octx.drawImage(img, sx, sy, cw, ch, 0, 0, cw, ch);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function getVerticalFullScreenMetrics(logoScale: number, logoAspect: number) {
+  const W = CANVAS_W;
+  const H = CANVAS_H;
+  const safeAspect = Number.isFinite(logoAspect) && logoAspect > 0.4 ? logoAspect : 3.15;
+  const drawW = Math.min(W - 44, Math.max(320, Math.round(620 * (logoScale / 100))));
+  const drawH = Math.min(320, Math.round(drawW / safeAspect));
+  const logoTopY = 12;
+  const logoBottomY = logoTopY + drawH;
+  // Seam sits right between the upper waveform and the slanted FortNews block so the black+orange waveform stays crisp on white
+  const headerY = Math.max(66, Math.min(148, Math.round(logoTopY + drawH * 0.34)));
+  const headlineAreaH = 176;
+  const videoY = Math.max(388, logoBottomY + headlineAreaH);
+  const orangeFooterH = 166;
+  const splitFooterH = 82;
+  const splitFooterY = H - splitFooterH;
+  const orangeFooterY = splitFooterY - orangeFooterH;
+  const videoH = Math.max(920, orangeFooterY - videoY);
+
+  return {
+    drawW,
+    drawH,
+    logoTopY,
+    logoBottomY,
+    headerY,
+    headerH: videoY - headerY,
+    videoY,
+    videoH,
+    orangeFooterY,
+    orangeFooterH,
+    splitFooterY,
+    splitFooterH,
+  };
+}
 
 const CANVAS_W = 1080;
 const CANVAS_H = 1920;
@@ -380,68 +613,97 @@ function drawMediaIntoWindow(
     ctx.fillText('ÁREA DO VÍDEO / IMAGEM', x + w / 2, y + h / 2 - 18);
     ctx.fillStyle = 'rgba(255,255,255,0.28)';
     ctx.font = '500 22px Inter, sans-serif';
-    ctx.fillText('Envie um vídeo MP4 ou foto ao lado', x + w / 2, y + h / 2 + 24);
+    ctx.fillText('Arraste ou envie um vídeo MP4 ou foto', x + w / 2, y + h / 2 + 24);
   }
 
   ctx.restore();
 }
 
 export const FortNewsVideoFrameStudio: React.FC = () => {
-  const { pautas, newsPortalSettings } = useFortMidia();
+  const { pautas } = useFortMidia();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const logoImgRef = useRef<HTMLImageElement | null>(null);
+  const logoTrimmedRef = useRef<HTMLCanvasElement | null>(null);
   const photoImgRef = useRef<HTMLImageElement | null>(null);
   const videoPosterCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const videoFileInputRef = useRef<HTMLInputElement | null>(null);
   const photoFileInputRef = useRef<HTMLInputElement | null>(null);
+  const combinedMediaInputRef = useRef<HTMLInputElement | null>(null);
   const logoFileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadDragDepthRef = useRef(0);
+  const previewDragDepthRef = useRef(0);
 
   // Abort controllers for async video preloading & silent background MP4 export
   const preloadAbortRef = useRef<AbortController | null>(null);
   const exportAbortRef = useRef<AbortController | null>(null);
 
+  // Saved Presets State (persisted in localStorage)
+  const [customPresets, setCustomPresets] = useState<VideoFramePreset[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(VIDEO_FRAME_PRESETS_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [defaultPresetId, setDefaultPresetId] = useState<string>(() => {
+    try {
+      return window.localStorage.getItem(VIDEO_FRAME_DEFAULT_PRESET_KEY) || BUILTIN_VIDEO_FRAME_PRESETS[0].id;
+    } catch {
+      return BUILTIN_VIDEO_FRAME_PRESETS[0].id;
+    }
+  });
+
+  const allPresets = [...BUILTIN_VIDEO_FRAME_PRESETS, ...customPresets];
+  const initialPreset =
+    allPresets.find((p) => p.id === defaultPresetId) || BUILTIN_VIDEO_FRAME_PRESETS[0];
+
+  const [activePresetId, setActivePresetId] = useState<string>(initialPreset.id);
+  const [showNewPresetForm, setShowNewPresetForm] = useState(false);
+  const [newPresetName, setNewPresetName] = useState('');
+
   // Template & Branding (Official FortNews vertical broadcast frame selected by default)
-  const [template, setTemplate] = useState<VideoFrameTemplate>('reportagem_vertical');
-  const [accentColor, setAccentColor] = useState('#fa6607');
+  const [template, setTemplate] = useState<VideoFrameTemplate>(initialPreset.template);
+  const [accentColor, setAccentColor] = useState(initialPreset.accentColor);
   const [logoUrl, setLogoUrl] = useState(
-    newsPortalSettings.logoUrl || OFFICIAL_FORTNEWS_LOGO_URL
+    initialPreset.logoUrl || OFFICIAL_FORTNEWS_VECTOR_LOGO_URL
   );
+  const [logoScale, setLogoScale] = useState<number>(initialPreset.logoScale || 105);
   const [selectedPautaId, setSelectedPautaId] = useState('');
 
   // Editable Text Fields (Template 2 - News Horizontal)
-  const [topHeadline, setTopHeadline] = useState('MEGAOPERAÇÃO\nDA PM');
-  const [cityTag, setCityTag] = useState('MAIRIPORÃ');
-  const [bottomHeadline, setBottomHeadline] = useState(
-    'FORÇA TÁTICA DESARTICULA LABORATÓRIO DO TRÁFICO E APREENDE 1,3 TONELADA DE DROGAS E ARMAS EM MAIRIPORÃ'
-  );
-  const [leadText, setLeadText] = useState(
-    'A Polícia Militar do Estado de São Paulo, por meio da equipe de Força Tática do 26º BPM/M, desmantelou uma refinaria clandestina de entorpecentes na noite do último sábado...'
-  );
+  const [topHeadline, setTopHeadline] = useState(initialPreset.topHeadline);
+  const [cityTag, setCityTag] = useState(initialPreset.cityTag);
+  const [bottomHeadline, setBottomHeadline] = useState(initialPreset.bottomHeadline);
+  const [leadText, setLeadText] = useState(initialPreset.leadText);
 
-  // Official Vertical Reportagem Fields (matches reference layout)
-  const [reportagemTitle, setReportagemTitle] = useState(
-    'COBERTURA EXCLUSIVA\nMATÉRIA EM VÍDEO'
+  // Official Vertical Reportagem Fields (full-screen 9:16)
+  const [reportagemTitle, setReportagemTitle] = useState(initialPreset.reportagemTitle);
+  const [reportagemBottomLabel, setReportagemBottomLabel] = useState(
+    initialPreset.reportagemBottomLabel
   );
-  const [reportagemBottomLabel, setReportagemBottomLabel] = useState('REPORTAGEM');
-  const [reportagemCityTag, setReportagemCityTag] = useState('CIMBAJU');
+  const [reportagemCityTag, setReportagemCityTag] = useState(initialPreset.reportagemCityTag);
 
   // Footer & Identity
-  const [groupLabel, setGroupLabel] = useState('Grupo FortNews');
-  const [portalUrl, setPortalUrl] = useState('www.jornalfortnews.com.br');
-  const [socialHandle, setSocialHandle] = useState('@fortnews_');
-  const [sloganText, setSloganText] = useState('INFORMAÇÃO QUE CONECTA VOCÊ');
+  const [groupLabel, setGroupLabel] = useState(initialPreset.groupLabel);
+  const [portalUrl, setPortalUrl] = useState(initialPreset.portalUrl);
+  const [socialHandle, setSocialHandle] = useState(initialPreset.socialHandle);
+  const [sloganText, setSloganText] = useState(initialPreset.sloganText);
 
   // Media Controls
   const [mediaSourceType, setMediaSourceType] = useState<'video' | 'photo'>('photo');
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoFileName, setVideoFileName] = useState('');
   const [photoUrl, setPhotoUrl] = useState('/assets/aistudio/Microfone_dc305011.jpg');
-  const [mediaFit, setMediaFit] = useState<'cover' | 'contain'>('cover');
-  const [mediaZoom, setMediaZoom] = useState(100);
-  const [mediaOffsetY, setMediaOffsetY] = useState(50);
-  const [showViewfinder, setShowViewfinder] = useState(true);
+  const [mediaFit, setMediaFit] = useState<'cover' | 'contain'>(initialPreset.mediaFit);
+  const [mediaZoom, setMediaZoom] = useState(initialPreset.mediaZoom);
+  const [mediaOffsetY, setMediaOffsetY] = useState(initialPreset.mediaOffsetY);
+  const [showViewfinder, setShowViewfinder] = useState(initialPreset.showViewfinder);
 
   // Video Playback & Async Preload State
   const [isPlaying, setIsPlaying] = useState(false);
@@ -450,6 +712,8 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
   const [videoDuration, setVideoDuration] = useState(0);
   const [isVideoLoading, setIsVideoLoading] = useState(false);
   const [videoLoadingPhase, setVideoLoadingPhase] = useState('');
+  const [isDragOverUpload, setIsDragOverUpload] = useState(false);
+  const [isDragOverPreview, setIsDragOverPreview] = useState(false);
 
   // Background Export State (no watching required, progress tracked)
   const [isExporting, setIsExporting] = useState(false);
@@ -462,6 +726,114 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     window.setTimeout(() => setNotice(null), 4000);
   };
 
+  const persistCustomPresets = (next: VideoFramePreset[]) => {
+    setCustomPresets(next);
+    try {
+      window.localStorage.setItem(VIDEO_FRAME_PRESETS_KEY, JSON.stringify(next));
+    } catch {
+      // Ignore storage quota errors
+    }
+  };
+
+  const applyVideoPreset = (preset: VideoFramePreset) => {
+    setActivePresetId(preset.id);
+    setTemplate(preset.template);
+    setAccentColor(preset.accentColor);
+    setLogoUrl(preset.logoUrl || OFFICIAL_FORTNEWS_VECTOR_LOGO_URL);
+    setLogoScale(preset.logoScale || 105);
+    setReportagemTitle(preset.reportagemTitle);
+    setReportagemBottomLabel(preset.reportagemBottomLabel);
+    setReportagemCityTag(preset.reportagemCityTag);
+    setTopHeadline(preset.topHeadline);
+    setCityTag(preset.cityTag);
+    setBottomHeadline(preset.bottomHeadline);
+    setLeadText(preset.leadText);
+    setGroupLabel(preset.groupLabel);
+    setPortalUrl(preset.portalUrl);
+    setSocialHandle(preset.socialHandle);
+    setSloganText(preset.sloganText);
+    setShowViewfinder(preset.showViewfinder);
+    setMediaFit(preset.mediaFit);
+    setMediaZoom(preset.mediaZoom);
+    setMediaOffsetY(preset.mediaOffsetY);
+    showToast(`Preset "${preset.name}" aplicado na moldura.`);
+  };
+
+  const buildCurrentPresetPayload = (id: string, name: string): VideoFramePreset => ({
+    id,
+    name,
+    builtIn: false,
+    template,
+    accentColor,
+    logoUrl,
+    logoScale,
+    reportagemTitle,
+    reportagemBottomLabel,
+    reportagemCityTag,
+    topHeadline,
+    cityTag,
+    bottomHeadline,
+    leadText,
+    groupLabel,
+    portalUrl,
+    socialHandle,
+    sloganText,
+    showViewfinder,
+    mediaFit,
+    mediaZoom,
+    mediaOffsetY,
+  });
+
+  const handleSavePreset = (asNew = false) => {
+    const existingCustom = customPresets.find((p) => p.id === activePresetId);
+    if (!asNew && existingCustom) {
+      const updated = buildCurrentPresetPayload(existingCustom.id, existingCustom.name);
+      persistCustomPresets(customPresets.map((p) => (p.id === existingCustom.id ? updated : p)));
+      showToast(`Preset "${existingCustom.name}" atualizado (Logo ${logoScale}%).`);
+      return;
+    }
+
+    const cleanName = newPresetName.trim() || `Moldura Personalizada ${customPresets.length + 1}`;
+    const created = buildCurrentPresetPayload(`custom-frame-${Date.now()}`, cleanName);
+    persistCustomPresets([...customPresets, created]);
+    setActivePresetId(created.id);
+    setNewPresetName('');
+    setShowNewPresetForm(false);
+    showToast(`Preset "${created.name}" salvo com sucesso!`);
+  };
+
+  const handleSetDefaultPreset = (id: string) => {
+    setDefaultPresetId(id);
+    try {
+      window.localStorage.setItem(VIDEO_FRAME_DEFAULT_PRESET_KEY, id);
+    } catch {
+      // Ignore storage error
+    }
+    const target = allPresets.find((p) => p.id === id);
+    showToast(`"${target?.name || 'Preset'}" definido como padrão ao abrir o estúdio.`);
+  };
+
+  const handleDeleteCustomPreset = (id: string) => {
+    const target = customPresets.find((p) => p.id === id);
+    const next = customPresets.filter((p) => p.id !== id);
+    persistCustomPresets(next);
+    if (activePresetId === id) {
+      setActivePresetId(BUILTIN_VIDEO_FRAME_PRESETS[0].id);
+    }
+    if (defaultPresetId === id) {
+      setDefaultPresetId(BUILTIN_VIDEO_FRAME_PRESETS[0].id);
+      try {
+        window.localStorage.setItem(
+          VIDEO_FRAME_DEFAULT_PRESET_KEY,
+          BUILTIN_VIDEO_FRAME_PRESETS[0].id
+        );
+      } catch {
+        // Ignore
+      }
+    }
+    if (target) showToast(`Preset "${target.name}" removido.`);
+  };
+
   // Cleanup blob URL on unmount
   useEffect(() => {
     return () => {
@@ -471,7 +843,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     };
   }, [videoUrl]);
 
-  // Preload Logo Image
+  // Preload Logo Image + Auto-trim transparent padding for crisp full-width rendering
   useEffect(() => {
     let active = true;
     const img = new Image();
@@ -479,11 +851,13 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     img.onload = () => {
       if (!active) return;
       logoImgRef.current = img;
+      logoTrimmedRef.current = trimTransparentImage(img);
       setAssetsTick((t) => t + 1);
     };
     img.onerror = () => {
       if (!active) return;
       logoImgRef.current = null;
+      logoTrimmedRef.current = null;
       setAssetsTick((t) => t + 1);
     };
     img.src = logoUrl;
@@ -531,26 +905,25 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         ctx.fillRect(0, 0, W, H);
         drawMediaIntoWindow(ctx, mediaEl, 0, 528, W, 620, mediaFit, mediaZoom, mediaOffsetY);
       } else {
-        const cardX = 52;
-        const cardW = W - cardX * 2;
-        const videoY = 384;
-        const videoH = 1296;
-        ctx.fillStyle = '#C9CDD4';
+        const trimmed = logoTrimmedRef.current;
+        const logoAspect = trimmed ? trimmed.width / Math.max(1, trimmed.height) : 3.15;
+        const m = getVerticalFullScreenMetrics(logoScale, logoAspect);
+        ctx.fillStyle = '#050507';
         ctx.fillRect(0, 0, W, H);
         drawMediaIntoWindow(
           ctx,
           mediaEl,
-          cardX,
-          videoY,
-          cardW,
-          videoH,
+          0,
+          m.videoY,
+          W,
+          m.videoH,
           mediaFit,
           mediaZoom,
           mediaOffsetY
         );
       }
     },
-    [template, mediaFit, mediaZoom, mediaOffsetY]
+    [template, mediaFit, mediaZoom, mediaOffsetY, logoScale, assetsTick]
   );
 
   // Draws ONLY the moldura graphics (supports transparent video cutout for CapCut & fast offline compositing!)
@@ -596,8 +969,10 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         ctx.fillRect(0, 0, 12, headerH);
         ctx.fillRect(W - 12, 0, 12, headerH);
 
-        const plaqueW = 620;
-        const plaqueH = 186;
+        const logoSource = logoTrimmedRef.current || logoImgRef.current;
+        const scaleRatio = Math.max(0.6, Math.min(1.6, logoScale / 100));
+        const plaqueW = Math.min(W - 64, Math.max(540, Math.round(620 * scaleRatio)));
+        const plaqueH = Math.min(220, Math.max(156, Math.round(186 * Math.min(1.18, scaleRatio))));
         const plaqueX = (W - plaqueW) / 2;
         const plaqueY = 0;
         drawRoundedRectPath(ctx, plaqueX, plaqueY, plaqueW, plaqueH, {
@@ -609,15 +984,20 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         ctx.fillStyle = '#FFFFFF';
         ctx.fill();
 
-        if (logoImgRef.current) {
-          const lImg = logoImgRef.current;
-          const pad = 18;
+        if (logoSource) {
+          const pad = 16;
           const availW = plaqueW - pad * 2;
           const availH = plaqueH - pad * 2;
-          const scale = Math.min(availW / lImg.width, availH / lImg.height);
-          const lw = lImg.width * scale;
-          const lh = lImg.height * scale;
-          ctx.drawImage(lImg, plaqueX + (plaqueW - lw) / 2, plaqueY + (plaqueH - lh) / 2, lw, lh);
+          const scale = Math.min(availW / logoSource.width, availH / logoSource.height);
+          const lw = logoSource.width * scale;
+          const lh = logoSource.height * scale;
+          ctx.drawImage(
+            logoSource,
+            plaqueX + (plaqueW - lw) / 2,
+            plaqueY + (plaqueH - lh) / 2,
+            lw,
+            lh
+          );
         } else {
           ctx.fillStyle = '#09090B';
           ctx.font = '900 66px "Plus Jakarta Sans", Inter, sans-serif';
@@ -771,101 +1151,79 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
           bottomStripY + bottomStripH / 2
         );
       } else {
-        /* ==================== PADRÃO OFICIAL FORTNEWS · REPORTAGEM / VÍDEO VERTICAL (9:16) ==================== */
-        const cardX = 52;
-        const cardW = W - cardX * 2; // 976px
-        const headerY = 116;
-        const headerH = 268;
-        const videoY = headerY + headerH; // 384px
-        const videoH = 1296; // ends at 1680px
-        const orangeFooterY = videoY + videoH; // 1680px
-        const orangeFooterH = 162; // ends at 1842px
-        const splitFooterY = orangeFooterY + orangeFooterH; // 1842px
-        const splitFooterH = H - splitFooterY; // 78px
+        /* ==================== PADRÃO OFICIAL FORTNEWS · TELA INTEIRA 9:16 (EDGE-TO-EDGE) ==================== */
+        const logoSource = logoTrimmedRef.current || logoImgRef.current;
+        const logoAspect = logoSource
+          ? logoSource.width / Math.max(1, logoSource.height)
+          : 3.15;
+        const m = getVerticalFullScreenMetrics(logoScale, logoAspect);
 
-        // 1. Subtle Frosted Studio Margin Frame (only outside the inner video viewport)
+        const cardX = 0;
+        const cardW = W; // 1080px — Tela inteira sem margens laterais
+        const {
+          drawW,
+          drawH,
+          logoTopY,
+          logoBottomY,
+          headerY,
+          headerH,
+          videoY,
+          videoH,
+          orangeFooterY,
+          orangeFooterH,
+          splitFooterY,
+          splitFooterH,
+        } = m;
+
+        // 1. Clean Light Full-Width Top Strip behind the official black+orange waveform (100% contrast, zero side margins)
         ctx.save();
-        const outerGrad = ctx.createLinearGradient(0, 0, W, H);
-        outerGrad.addColorStop(0, '#E3E5E9');
-        outerGrad.addColorStop(0.35, '#CFD3DA');
-        outerGrad.addColorStop(0.7, '#B8BEC7');
-        outerGrad.addColorStop(1, '#D4D7DD');
-        ctx.fillStyle = outerGrad;
-
-        // Top margin strip (full width above header)
+        const topStripGrad = ctx.createLinearGradient(0, 0, 0, headerY);
+        topStripGrad.addColorStop(0, '#FFFFFF');
+        topStripGrad.addColorStop(1, '#EFF1F5');
+        ctx.fillStyle = topStripGrad;
         ctx.fillRect(0, 0, W, headerY);
-        // Left margin column
-        ctx.fillRect(0, headerY, cardX, H - headerY);
-        // Right margin column
-        ctx.fillRect(cardX + cardW, headerY, cardX, H - headerY);
-
-        // Soft studio depth bands on left/right outer margins
-        ctx.fillStyle = 'rgba(24, 24, 28, 0.14)';
-        ctx.fillRect(0, 740, cardX, 560);
-        ctx.fillRect(cardX + cardW, 240, cardX, 460);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.32)';
-        ctx.fillRect(0, 0, cardX, 420);
-        ctx.fillRect(cardX + cardW, 1340, cardX, 580);
-
-        // Crisp subtle frame edge shadows along left/right of card
-        const leftShadow = ctx.createLinearGradient(cardX - 18, 0, cardX, 0);
-        leftShadow.addColorStop(0, 'rgba(0,0,0,0)');
-        leftShadow.addColorStop(1, 'rgba(0,0,0,0.22)');
-        ctx.fillStyle = leftShadow;
-        ctx.fillRect(cardX - 18, headerY, 18, H - headerY);
-
-        const rightShadow = ctx.createLinearGradient(cardX + cardW, 0, cardX + cardW + 18, 0);
-        rightShadow.addColorStop(0, 'rgba(0,0,0,0.22)');
-        rightShadow.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = rightShadow;
-        ctx.fillRect(cardX + cardW, headerY, 18, H - headerY);
         ctx.restore();
 
-        // 2. Top Audio Waveform Graphic (centered above FortNews badge)
-        drawTopAudioWaveform(ctx, W / 2, 36, '#09090B', accentColor);
-
-        // 3. Black Editorial Header Block + Left Vertical Orange Accent Stripe
+        // 2. Full-Width Black Editorial Header Block + Left Vertical Accent Stripe
         ctx.fillStyle = '#050507';
         ctx.fillRect(cardX, headerY, cardW, headerH);
 
         ctx.fillStyle = accentColor;
-        ctx.fillRect(cardX, headerY, 14, headerH);
+        ctx.fillRect(cardX, headerY, 16, headerH);
 
-        // 4. Centered Diagonal Two-Tone FortNews Badge (overlapping top edge of black header)
-        const isDefaultLogo =
-          !logoUrl ||
-          logoUrl === OFFICIAL_FORTNEWS_LOGO_URL ||
-          logoUrl === newsPortalSettings.logoUrl;
-        drawSlantedFortNewsBadge(
-          ctx,
-          W / 2,
-          64,
-          accentColor,
-          logoImgRef.current,
-          isDefaultLogo,
-          sloganText
-        );
+        // 3. Official Vectorized FortNews Logo (centered, auto-trimmed, user-resizable)
+        if (logoSource) {
+          ctx.save();
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.32)';
+          ctx.shadowBlur = 16;
+          ctx.shadowOffsetY = 4;
+          const lx = Math.round((W - drawW) / 2);
+          ctx.drawImage(logoSource, lx, logoTopY, drawW, drawH);
+          ctx.restore();
+        } else {
+          drawTopAudioWaveform(ctx, W / 2, 36, '#09090B', accentColor);
+          drawSlantedFortNewsBadge(ctx, W / 2, 64, accentColor, null, true, sloganText);
+        }
 
-        // 5. Bold White 2-Line Headline + Inline Rounded Orange Tag Pill (e.g. CIMBAJU)
+        // 4. Bold White 2-Line Headline + Inline Rounded Orange Tag Pill (e.g. CIMBAJU)
         const rawTitle = (reportagemTitle || 'COBERTURA EXCLUSIVA\nMATÉRIA EM VÍDEO')
           .trim()
           .toUpperCase();
         const vCity = (reportagemCityTag || 'CIMBAJU').trim().toUpperCase();
 
         ctx.save();
-        const headlineLeftX = cardX + 54;
-        const headlineRightLimit = cardX + cardW - 44;
+        const headlineLeftX = 52;
+        const headlineRightLimit = W - 44;
         const fullLineMaxW = headlineRightLimit - headlineLeftX;
 
         // Pre-measure inline orange city pill width
         ctx.font = '900 36px "Plus Jakarta Sans", Inter, sans-serif';
         const pillTextW = vCity ? ctx.measureText(vCity).width : 0;
-        const pillW = vCity ? Math.min(310, Math.max(176, pillTextW + 44)) : 0;
+        const pillW = vCity ? Math.min(320, Math.max(180, pillTextW + 46)) : 0;
         const pillH = 56;
         const pillGap = vCity ? 28 : 0;
 
-        // Split into 2 lines cleanly (respecting explicit newline or wrapping naturally)
-        let titleFontSize = 62;
+        let titleFontSize = 64;
         ctx.font = `900 ${titleFontSize}px "Plus Jakarta Sans", Inter, sans-serif`;
         const explicitLines = rawTitle
           .split('\n')
@@ -888,7 +1246,6 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
           }
         }
 
-        // Auto-fit font size so Line 1 fits full width and Line 2 fits cleanly beside the orange pill
         const line2MaxW = vCity ? fullLineMaxW - pillW - pillGap : fullLineMaxW;
         while (titleFontSize > 42) {
           ctx.font = `900 ${titleFontSize}px "Plus Jakarta Sans", Inter, sans-serif`;
@@ -903,9 +1260,13 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
 
+        const headlineZoneTop = Math.max(headerY + 110, logoBottomY + 14);
+        const headlineZoneBottom = videoY - 14;
+        const headlineZoneMid = (headlineZoneTop + headlineZoneBottom) / 2;
+
         if (line2) {
-          const line1Y = headerY + 138;
-          const line2Y = headerY + 214;
+          const line1Y = headlineZoneMid - 38;
+          const line2Y = headlineZoneMid + 38;
           ctx.fillText(line1, headlineLeftX, line1Y, fullLineMaxW);
           ctx.fillText(line2, headlineLeftX, line2Y, line2MaxW);
 
@@ -913,7 +1274,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
             const line2ActualW = Math.min(line2MaxW, ctx.measureText(line2).width);
             const pillX = Math.min(
               headlineRightLimit - pillW,
-              Math.max(headlineLeftX + line2ActualW + 34, headlineRightLimit - pillW - 10)
+              Math.max(headlineLeftX + line2ActualW + 34, headlineRightLimit - pillW - 6)
             );
             const pillY = line2Y - pillH / 2 - 2;
             drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, {
@@ -932,8 +1293,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
             ctx.fillText(vCity, pillX + pillW / 2, pillY + pillH / 2 + 2, pillW - 24);
           }
         } else {
-          // Single-line title with pill aligned neatly on the right
-          const singleY = headerY + 178;
+          const singleY = headlineZoneMid;
           ctx.fillText(line1, headlineLeftX, singleY, line2MaxW);
           if (vCity) {
             const pillX = headlineRightLimit - pillW;
@@ -956,7 +1316,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         }
         ctx.restore();
 
-        // 6. Two-Tone Camera Viewfinder L-Brackets inside Video Viewport (Grey Left + Orange Right)
+        // 5. Two-Tone Camera Viewfinder L-Brackets inside Full-Screen Video Viewport
         if (showViewfinder) {
           drawViewfinderCorners(
             ctx,
@@ -964,7 +1324,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
             videoY,
             cardW,
             videoH,
-            44,
+            40,
             106,
             10,
             'rgba(150, 155, 163, 0.92)',
@@ -972,45 +1332,43 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
           );
         }
 
-        // 7. Bottom Solid Orange Editorial Banner
+        // 6. Full-Width Bottom Solid Orange Editorial Banner
         ctx.fillStyle = accentColor;
         ctx.fillRect(cardX, orangeFooterY, cardW, orangeFooterH);
 
         ctx.fillStyle = '#050507';
-        ctx.font = '900 72px "Plus Jakarta Sans", Inter, sans-serif';
+        ctx.font = '900 74px "Plus Jakarta Sans", Inter, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(
           (reportagemBottomLabel || 'REPORTAGEM').toUpperCase(),
           W / 2,
-          orangeFooterY + 56,
+          orangeFooterY + 58,
           cardW - 64
         );
 
-        ctx.font = '800 42px "Plus Jakarta Sans", Inter, sans-serif';
+        ctx.font = '800 43px "Plus Jakarta Sans", Inter, sans-serif';
         ctx.fillText(
           (sloganText || 'INFORMAÇÃO QUE CONECTA VOCÊ').toUpperCase(),
           W / 2,
-          orangeFooterY + 122,
+          orangeFooterY + 124,
           cardW - 64
         );
 
-        // 8. Bottom Diagonal Split Footer Bar (Black Left + Orange Slash + Cool Grey Right)
-        const slashTopX = cardX + 626;
-        const slashBotX = cardX + 590;
-        const slashW = 16;
+        // 7. Full-Width Bottom Diagonal Split Footer Bar (Black Left + Orange Slash + Cool Grey Right)
+        const slashTopX = Math.round(W * 0.64);
+        const slashBotX = Math.round(W * 0.605);
+        const slashW = 18;
 
-        // Left Black Zone
         ctx.beginPath();
-        ctx.moveTo(cardX, splitFooterY);
+        ctx.moveTo(0, splitFooterY);
         ctx.lineTo(slashTopX, splitFooterY);
         ctx.lineTo(slashBotX, H);
-        ctx.lineTo(cardX, H);
+        ctx.lineTo(0, H);
         ctx.closePath();
         ctx.fillStyle = '#050507';
         ctx.fill();
 
-        // Diagonal Orange Slash Divider
         ctx.beginPath();
         ctx.moveTo(slashTopX, splitFooterY);
         ctx.lineTo(slashTopX + slashW, splitFooterY);
@@ -1020,37 +1378,35 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         ctx.fillStyle = accentColor;
         ctx.fill();
 
-        // Right Cool Grey Zone
         ctx.beginPath();
         ctx.moveTo(slashTopX + slashW, splitFooterY);
-        ctx.lineTo(cardX + cardW, splitFooterY);
-        ctx.lineTo(cardX + cardW, H);
+        ctx.lineTo(W, splitFooterY);
+        ctx.lineTo(W, H);
         ctx.lineTo(slashBotX + slashW, H);
         ctx.closePath();
         ctx.fillStyle = '#9EA3AB';
         ctx.fill();
 
-        // Footer Texts
         ctx.fillStyle = '#FFFFFF';
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'center';
 
-        ctx.font = '700 35px Inter, sans-serif';
+        ctx.font = '700 37px Inter, sans-serif';
         ctx.fillText(
           portalUrl || 'www.jornalfortnews.com.br',
-          cardX + (slashBotX - cardX) / 2 + 6,
+          slashBotX / 2 + 8,
           splitFooterY + splitFooterH / 2 + 1,
-          slashBotX - cardX - 36
+          slashBotX - 44
         );
 
-        ctx.font = '700 36px Inter, sans-serif';
+        ctx.font = '700 38px Inter, sans-serif';
         const rightZoneStart = slashTopX + slashW;
-        const rightZoneW = cardX + cardW - rightZoneStart;
+        const rightZoneW = W - rightZoneStart;
         ctx.fillText(
           socialHandle || '@fortnews_',
           rightZoneStart + rightZoneW / 2 - 4,
           splitFooterY + splitFooterH / 2 + 1,
-          rightZoneW - 28
+          rightZoneW - 32
         );
       }
     },
@@ -1058,7 +1414,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
       template,
       accentColor,
       logoUrl,
-      newsPortalSettings.logoUrl,
+      logoScale,
       topHeadline,
       cityTag,
       bottomHeadline,
@@ -1131,11 +1487,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     };
   }, []);
 
-  const handleUploadVideo = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-
+  const processVideoFile = async (file: File) => {
     // Abort any previous preload in flight
     preloadAbortRef.current?.abort();
     const preloadController = new AbortController();
@@ -1178,19 +1530,138 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     }
   };
 
-  const handleUploadPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processPhotoFile = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === 'string') {
         setPhotoUrl(reader.result);
         setMediaSourceType('photo');
-        showToast('Imagem aplicada dentro da moldura.');
+        showToast(`Imagem "${file.name}" aplicada dentro da moldura.`);
       }
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleMediaFile = (file: File) => {
+    if (isExporting) {
+      showToast('Aguarde a exportação atual terminar ou cancele antes de trocar a mídia.');
+      return;
+    }
+
+    const lowerName = file.name.toLowerCase();
+    const isVideo =
+      file.type.startsWith('video/') ||
+      /\.(mp4|mov|webm|m4v|mkv|avi|ogv)$/i.test(lowerName);
+    const isImage =
+      file.type.startsWith('image/') ||
+      /\.(jpg|jpeg|png|webp|gif|avif|bmp)$/i.test(lowerName);
+
+    if (isVideo) {
+      void processVideoFile(file);
+    } else if (isImage) {
+      processPhotoFile(file);
+    } else {
+      showToast('Formato não suportado. Envie ou arraste um vídeo (MP4/MOV/WebM) ou uma foto (JPG/PNG/WebP).');
+    }
+  };
+
+  const handleUploadVideo = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     e.target.value = '';
+    await processVideoFile(file);
+  };
+
+  const handleUploadPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    processPhotoFile(file);
+  };
+
+  const handleUploadAnyMedia = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    handleMediaFile(file);
+  };
+
+  const hasDraggedFiles = (dt: DataTransfer | null) => {
+    if (!dt) return false;
+    return Array.from(dt.types || []).includes('Files');
+  };
+
+  const handleUploadDragEnter = (e: React.DragEvent<HTMLElement>) => {
+    if (isExporting || !hasDraggedFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    uploadDragDepthRef.current += 1;
+    setIsDragOverUpload(true);
+  };
+
+  const handleUploadDragOver = (e: React.DragEvent<HTMLElement>) => {
+    if (isExporting || !hasDraggedFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleUploadDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    if (!hasDraggedFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    uploadDragDepthRef.current = Math.max(0, uploadDragDepthRef.current - 1);
+    if (uploadDragDepthRef.current === 0) {
+      setIsDragOverUpload(false);
+    }
+  };
+
+  const handleUploadDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadDragDepthRef.current = 0;
+    setIsDragOverUpload(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      handleMediaFile(file);
+    }
+  };
+
+  const handlePreviewDragEnter = (e: React.DragEvent<HTMLElement>) => {
+    if (isExporting || !hasDraggedFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    previewDragDepthRef.current += 1;
+    setIsDragOverPreview(true);
+  };
+
+  const handlePreviewDragOver = (e: React.DragEvent<HTMLElement>) => {
+    if (isExporting || !hasDraggedFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handlePreviewDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    if (!hasDraggedFiles(e.dataTransfer)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    previewDragDepthRef.current = Math.max(0, previewDragDepthRef.current - 1);
+    if (previewDragDepthRef.current === 0) {
+      setIsDragOverPreview(false);
+    }
+  };
+
+  const handlePreviewDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    previewDragDepthRef.current = 0;
+    setIsDragOverPreview(false);
+    if (isExporting) return;
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      handleMediaFile(file);
+    }
   };
 
   const handleUploadLogo = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1438,6 +1909,122 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
           </div>
         </div>
 
+        {/* Presets da Moldura (Salvar, Aplicar, Definir Padrão) */}
+        <div className="rounded-lg border border-white/10 bg-[#0B0B0E] p-3.5 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
+              <Bookmark className="h-3.5 w-3.5 text-[#fa6607]" aria-hidden="true" />
+              Presets Salvos da Moldura
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {customPresets.some((p) => p.id === activePresetId) && (
+                <button
+                  type="button"
+                  onClick={() => handleSavePreset(false)}
+                  className="inline-flex items-center gap-1 rounded-md border border-[#fa6607]/50 bg-[#fa6607]/15 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#fa6607]/25 cursor-pointer"
+                >
+                  <Save className="h-3 w-3 text-[#fa6607]" aria-hidden="true" />
+                  Atualizar Preset
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowNewPresetForm((v) => !v)}
+                className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-[#16161A] px-2.5 py-1 text-[11px] font-semibold text-zinc-200 hover:border-[#fa6607]/60 hover:text-white cursor-pointer"
+              >
+                <Plus className="h-3 w-3 text-[#fa6607]" aria-hidden="true" />
+                Salvar Novo Preset
+              </button>
+            </div>
+          </div>
+
+          {showNewPresetForm && (
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={newPresetName}
+                onChange={(e) => setNewPresetName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleSavePreset(true);
+                  }
+                }}
+                placeholder="Nome do preset (ex: Reportagem Logo Grande 125%)"
+                className="flex-1 min-w-[200px] rounded-lg border border-white/15 bg-[#121216] px-3 py-1.5 text-xs text-white focus:border-[#fa6607] focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => handleSavePreset(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#fa6607] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#e55a00] cursor-pointer"
+              >
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+                Salvar Preset
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNewPresetForm(false);
+                  setNewPresetName('');
+                }}
+                className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-zinc-400 hover:text-white cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {allPresets.map((preset) => {
+              const isActive = preset.id === activePresetId;
+              const isDefault = preset.id === defaultPresetId;
+              return (
+                <div
+                  key={preset.id}
+                  className={`inline-flex items-center rounded-lg border text-[11px] transition-colors ${
+                    isActive
+                      ? 'border-[#fa6607] bg-[#fa6607]/15 text-white'
+                      : 'border-white/10 bg-[#16161A] text-zinc-300 hover:border-white/25'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => applyVideoPreset(preset)}
+                    className="px-2.5 py-1.5 font-medium cursor-pointer"
+                  >
+                    {preset.name}
+                    <span className="ml-1.5 font-mono text-[10px] text-zinc-400 tabular-nums">
+                      {preset.logoScale}%
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetDefaultPreset(preset.id)}
+                    title={isDefault ? 'Preset padrão ao abrir' : 'Definir como padrão ao abrir'}
+                    aria-label={isDefault ? 'Preset padrão' : `Definir ${preset.name} como padrão`}
+                    className={`px-1.5 py-1.5 cursor-pointer ${
+                      isDefault ? 'text-amber-400' : 'text-zinc-500 hover:text-amber-300'
+                    }`}
+                  >
+                    <Star className={`h-3 w-3 ${isDefault ? 'fill-current' : ''}`} />
+                  </button>
+                  {!preset.builtIn && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCustomPreset(preset.id)}
+                      title="Excluir preset"
+                      aria-label={`Excluir preset ${preset.name}`}
+                      className="pr-2 pl-1 py-1.5 text-zinc-500 hover:text-red-400 cursor-pointer"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         {/* 2 Official Frame Pattern Switcher */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <button
@@ -1452,12 +2039,12 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
             <div className="flex items-center justify-between gap-2">
               <span className="inline-flex items-center gap-2 text-xs font-bold text-white">
                 <Film className="h-4 w-4 text-[#fa6607]" aria-hidden="true" />
-                Padrão 1 · Oficial FortNews Reportagem (9:16)
+                Padrão 1 · Oficial FortNews Tela Inteira (9:16)
               </span>
               <span className="font-mono text-[10px] text-zinc-400">1080×1920</span>
             </div>
             <p className="mt-1.5 text-[11px] text-zinc-400 leading-relaxed">
-              Ondas de áudio no topo, selo FortNews diagonal, manchete branca em 2 linhas + tag laranja CIMBAJU, cantoneiras cinza/laranja, tarja REPORTAGEM e rodapé diagonal preto/cinza.
+              Tela cheia 100% sem margens laterais, logo oficial FortNews vetorizado redimensionável, manchete em 2 linhas + tag CIMBAJU, cantoneiras, tarja REPORTAGEM e rodapé diagonal.
             </p>
           </button>
 
@@ -1478,7 +2065,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
               <span className="font-mono text-[10px] text-zinc-400">1080×1920</span>
             </div>
             <p className="mt-1.5 text-[11px] text-zinc-400 leading-relaxed">
-              Topo escuro com logo FortNews, manchete + tag laranja da cidade, vídeo horizontal central com mira nos cantos, faixa laranja com ícone de vídeo e card branco inferior com manchete e lide.
+              Topo escuro com logo oficial FortNews, manchete + tag laranja da cidade, vídeo horizontal central com mira nos cantos, faixa laranja com ícone de vídeo e card branco inferior.
             </p>
           </button>
         </div>
@@ -1495,8 +2082,18 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
         {/* LEFT COLUMN: Controls (7 cols) */}
         <div className="lg:col-span-7 space-y-5">
-          {/* 1. Upload de Vídeo ou Foto */}
-          <div className="rounded-xl border border-white/10 bg-[#111114] p-5 space-y-4">
+          {/* 1. Upload de Vídeo ou Foto (com Drag & Drop) */}
+          <div
+            onDragEnter={handleUploadDragEnter}
+            onDragOver={handleUploadDragOver}
+            onDragLeave={handleUploadDragLeave}
+            onDrop={handleUploadDrop}
+            className={`rounded-xl border p-5 space-y-4 transition-colors duration-150 ${
+              isDragOverUpload
+                ? 'border-[#fa6607] bg-[#fa6607]/10'
+                : 'border-white/10 bg-[#111114]'
+            }`}
+          >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300">
                 1. Vídeo ou Imagem da Moldura
@@ -1527,6 +2124,47 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
               </div>
             </div>
 
+            {/* Interactive Drag & Drop Upload Zone */}
+            <input
+              ref={combinedMediaInputRef}
+              type="file"
+              accept="video/mp4,video/quicktime,video/webm,video/*,image/*"
+              onChange={handleUploadAnyMedia}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => combinedMediaInputRef.current?.click()}
+              disabled={isExporting}
+              className={`group w-full rounded-xl border-2 border-dashed px-4 py-5 text-center transition-colors duration-150 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#fa6607] ${
+                isDragOverUpload
+                  ? 'border-[#fa6607] bg-[#fa6607]/15'
+                  : 'border-white/15 bg-[#0B0B0E] hover:border-[#fa6607]/60 hover:bg-[#141418]'
+              }`}
+            >
+              <div className="flex flex-col items-center justify-center gap-2">
+                <div
+                  className={`flex h-10 w-10 items-center justify-center rounded-lg border transition-colors ${
+                    isDragOverUpload
+                      ? 'border-[#fa6607] bg-[#fa6607] text-white'
+                      : 'border-white/10 bg-[#16161A] text-[#fa6607] group-hover:border-[#fa6607]/50'
+                  }`}
+                >
+                  <Upload className="h-5 w-5" aria-hidden="true" />
+                </div>
+                <div className="space-y-0.5">
+                  <p className="text-xs font-semibold text-white">
+                    {isDragOverUpload
+                      ? 'Solte o vídeo ou foto aqui para aplicar na moldura'
+                      : 'Arraste e solte um vídeo ou foto aqui'}
+                  </p>
+                  <p className="text-[11px] text-zinc-400">
+                    MP4, MOV, WebM, JPG, PNG ou WebP · clique aqui ou use os botões abaixo
+                  </p>
+                </div>
+              </div>
+            </button>
+
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <input
                 ref={videoFileInputRef}
@@ -1538,7 +2176,8 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
               <button
                 type="button"
                 onClick={() => videoFileInputRef.current?.click()}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#fa6607]/50 bg-[#fa6607]/15 px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#fa6607]/25 cursor-pointer"
+                disabled={isExporting}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#fa6607]/50 bg-[#fa6607]/15 px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#fa6607]/25 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 <Video className="h-4 w-4 text-[#fa6607]" aria-hidden="true" />
                 {videoFileName ? 'Trocar Vídeo (MP4/MOV)' : 'Enviar Vídeo (MP4 / MOV)'}
@@ -1554,7 +2193,8 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
               <button
                 type="button"
                 onClick={() => photoFileInputRef.current?.click()}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 bg-[#16161A] px-4 py-2.5 text-xs font-semibold text-zinc-200 hover:bg-white/10 cursor-pointer"
+                disabled={isExporting}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 bg-[#16161A] px-4 py-2.5 text-xs font-semibold text-zinc-200 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 <ImageIcon className="h-4 w-4 text-[#fa6607]" aria-hidden="true" />
                 Enviar Foto de Fundo
@@ -1796,7 +2436,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
 
               <div>
                 <label className="mb-1.5 block text-[11px] text-zinc-400">Logo do Topo</label>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <input
                     ref={logoFileInputRef}
                     type="file"
@@ -1814,11 +2454,43 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setLogoUrl(OFFICIAL_FORTNEWS_LOGO_URL)}
+                    onClick={() => {
+                      setLogoUrl(OFFICIAL_FORTNEWS_VECTOR_LOGO_URL);
+                      setLogoScale(105);
+                    }}
                     className="rounded-lg border border-white/10 px-2.5 py-2 text-[11px] text-zinc-400 hover:text-white cursor-pointer"
                   >
-                    Padrão FortNews
+                    Logo Oficial FortNews
                   </button>
+                </div>
+
+                {/* Tamanho do Logo */}
+                <div className="mt-3 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                    <span>Tamanho do Logo</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-semibold text-[#fa6607] tabular-nums">
+                        {logoScale}%
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setLogoScale(105)}
+                        className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:text-white cursor-pointer"
+                      >
+                        Padrão
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    aria-label="Tamanho do logo da moldura"
+                    min={60}
+                    max={160}
+                    step={5}
+                    value={logoScale}
+                    onChange={(e) => setLogoScale(Number(e.target.value))}
+                    className="w-full accent-[#fa6607] cursor-pointer"
+                  />
                 </div>
               </div>
             </div>
@@ -1888,14 +2560,36 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
               </span>
             </div>
 
-            {/* 9:16 Live Canvas Preview + Visual Preloader Overlay (zero black screen on load/export) */}
-            <div className="relative mx-auto w-full max-w-[340px] overflow-hidden rounded-xl border border-white/15 bg-zinc-950 shadow-xl">
+            {/* 9:16 Live Canvas Preview + Drag & Drop + Visual Preloader Overlay (zero black screen on load/export) */}
+            <div
+              onDragEnter={handlePreviewDragEnter}
+              onDragOver={handlePreviewDragOver}
+              onDragLeave={handlePreviewDragLeave}
+              onDrop={handlePreviewDrop}
+              className={`relative mx-auto w-full max-w-[340px] overflow-hidden rounded-xl border bg-zinc-950 shadow-xl transition-colors duration-150 ${
+                isDragOverPreview ? 'border-[#fa6607] ring-2 ring-[#fa6607]/40' : 'border-white/15'
+              }`}
+            >
               <canvas
                 ref={canvasRef}
                 width={CANVAS_W}
                 height={CANVAS_H}
                 className="block w-full h-auto"
               />
+
+              {isDragOverPreview && !isExporting && (
+                <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center bg-zinc-950/80 backdrop-blur-sm px-6 text-center">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-dashed border-[#fa6607] bg-[#fa6607]/20 text-[#fa6607]">
+                    <Upload className="h-7 w-7" aria-hidden="true" />
+                  </div>
+                  <p className="mt-3 text-xs font-bold uppercase tracking-wider text-white">
+                    Solte aqui
+                  </p>
+                  <p className="mt-1 text-[11px] text-zinc-300">
+                    Aplicar vídeo ou foto diretamente na moldura
+                  </p>
+                </div>
+              )}
 
               {(isVideoLoading || isExporting) && (
                 <div

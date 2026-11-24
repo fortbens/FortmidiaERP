@@ -212,6 +212,10 @@ export const OFFICIAL_BRAND_LOGOS = [
     label: 'Logo FortMídia Onda Digital',
     url: '/assets/aistudio/Gemini_Generated_Image_ov5owov5owov5owo_7f33ef20.jpg',
   },
+  {
+    label: 'Logo FortNews Ondas (Vetor Oficial)',
+    url: '/assets/aistudio/Logotipo_FortNews_vetorizado__9__b9ef51c4.png',
+  },
 ];
 
 export const INITIAL_SITE_SETTINGS: SiteSettings = {

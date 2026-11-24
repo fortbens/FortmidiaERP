@@ -66,6 +66,7 @@ type WatermarkPos =
   | 'tiled';
 
 type MaskMode = 'dark' | 'light' | 'custom';
+type ArtFrameTemplate = 'classic' | 'fortnews_editorial';
 
 const ALL_FORMAT_SPECS: Record<FormatId, { label: string; w: number; h: number }> = {
   feed_4_5: { label: 'Instagram Feed (1080×1350)', w: 1080, h: 1350 },
@@ -106,6 +107,142 @@ function hexToRgba(hex: string, alpha: number): string {
   const g = (num >> 8) & 255;
   const b = num & 255;
   return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha)).toFixed(2)})`;
+}
+
+function isLightHexColor(hex: string): boolean {
+  const clean = hex.replace('#', '').trim();
+  const full =
+    clean.length === 3
+      ? clean
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : clean.padEnd(6, '0').slice(0, 6);
+  const num = parseInt(full, 16);
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b > 175;
+}
+
+function drawRoundedPill(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+) {
+  const radius = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + w - radius, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+  ctx.lineTo(x + w, y + h - radius);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+  ctx.lineTo(x + radius, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+}
+
+function drawEditorialFortNewsSeamBadge(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  seamY: number,
+  scale: number,
+  accentColor: string
+) {
+  ctx.save();
+  ctx.translate(cx, seamY);
+  ctx.scale(scale, scale);
+
+  // 1. Symmetric Audio Waveform above the badge (white left + accent right with contrast shadow)
+  const halfHeights = [
+    5, 9, 17, 11, 23, 15, 9, 20, 32, 16, 11, 28, 48, 26, 15, 20, 35, 22, 13, 25, 42, 22, 13, 19,
+    29, 16, 10, 18,
+  ];
+  const barW = 3.8;
+  const step = 8.4;
+  const totalBars = halfHeights.length * 2 - 1;
+  const waveStartX = -((totalBars - 1) * step) / 2;
+  const waveCy = -92;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 2;
+  for (let i = 0; i < totalBars; i++) {
+    const mirrorIdx = i < halfHeights.length ? i : totalBars - 1 - i;
+    const bh = halfHeights[mirrorIdx];
+    const bx = waveStartX + i * step - barW / 2;
+    const by = waveCy - bh / 2;
+    ctx.fillStyle = i < halfHeights.length ? '#FFFFFF' : accentColor;
+    drawRoundedPill(ctx, bx, by, barW, bh, 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // 2. Diagonal Split FortNews Badge (Orange left "Fort" + Metallic Grey right "News")
+  const badgeW = 548;
+  const badgeH = 110;
+  const slant = 30;
+  const leftX = -badgeW / 2;
+  const midX = -20;
+  const rightX = badgeW / 2;
+  const topY = -62;
+  const botY = topY + badgeH;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.24)';
+  ctx.shadowBlur = 18;
+  ctx.shadowOffsetY = 6;
+
+  // Left Orange Trapezoid
+  ctx.beginPath();
+  ctx.moveTo(leftX + slant, topY);
+  ctx.lineTo(midX + slant * 0.55, topY);
+  ctx.lineTo(midX - slant * 0.45, botY);
+  ctx.lineTo(leftX, botY);
+  ctx.closePath();
+  ctx.fillStyle = accentColor;
+  ctx.fill();
+
+  // Right Cool Grey Trapezoid (matching Padrão de Notícias FortNews reference)
+  ctx.beginPath();
+  ctx.moveTo(midX + slant * 0.55, topY);
+  ctx.lineTo(rightX, topY);
+  ctx.lineTo(rightX - slant, botY);
+  ctx.lineTo(midX - slant * 0.45, botY);
+  ctx.closePath();
+  ctx.fillStyle = '#9EA2A8';
+  ctx.fill();
+  ctx.restore();
+
+  // Wordmark: "Fort" (Black on Orange) & "News" (Orange on Grey)
+  ctx.font = '900 72px "Plus Jakarta Sans", Inter, sans-serif';
+  ctx.textBaseline = 'middle';
+
+  ctx.fillStyle = '#050507';
+  ctx.textAlign = 'right';
+  ctx.fillText('Fort', midX - 8, topY + 48);
+
+  ctx.fillStyle = accentColor;
+  ctx.textAlign = 'left';
+  ctx.fillText('News', midX + 16, topY + 48);
+
+  // Subtitle split: "INFORMAÇÃO" (black) + "QUE CONECTA VOCÊ" (white)
+  ctx.font = '800 16px "Plus Jakarta Sans", Inter, sans-serif';
+  ctx.fillStyle = '#050507';
+  ctx.textAlign = 'right';
+  ctx.fillText('I N F O R M A Ç Ã O', midX - 16, botY - 14);
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'left';
+  ctx.fillText('Q U E   C O N E C T A   V O C Ê', midX + 6, botY - 14);
+
+  ctx.restore();
 }
 
 function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
@@ -219,6 +356,11 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
     'fortnews'
   );
   const [formatId, setFormatId] = useState<FormatId>('feed_4_5');
+  const [artFrameTemplate, setArtFrameTemplate] = useState<ArtFrameTemplate>('classic');
+  const [editorialLogoScale, setEditorialLogoScale] = useState<number>(100);
+  const [editorialFooterSlogan, setEditorialFooterSlogan] = useState<string>(
+    'Informação que conecta você'
+  );
   const [newPresetName, setNewPresetName] = useState('');
   const [showNewPresetInput, setShowNewPresetInput] = useState(false);
   const [presetNotice, setPresetNotice] = useState<string | null>(null);
@@ -574,6 +716,9 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
     setHostPhotoScale(preset.hostPhotoScale || 100);
     if (preset.programLogoUrl) setProgramLogoUrl(preset.programLogoUrl);
     if (preset.bgImageUrl) setBgImageUrl(preset.bgImageUrl);
+    if (preset.artFrameTemplate) setArtFrameTemplate(preset.artFrameTemplate);
+    if (preset.editorialLogoScale) setEditorialLogoScale(preset.editorialLogoScale);
+    if (preset.editorialFooterSlogan) setEditorialFooterSlogan(preset.editorialFooterSlogan);
     flashPresetNotice(`Preset "${preset.name}" aplicado.`);
   };
 
@@ -626,6 +771,9 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
       hostPhotoScale,
       programLogoUrl,
       bgImageUrl: studioMode === 'convite' ? bgImageUrl : existing?.bgImageUrl,
+      artFrameTemplate,
+      editorialLogoScale,
+      editorialFooterSlogan,
       lockedBySuperAdmin: marketingPresetsLocked,
       updatedBy: activeOperator?.name || 'Super Admin',
       updatedAt: `${new Date().toLocaleDateString('pt-BR')} · ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`,
@@ -672,6 +820,228 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
       const H = spec.h;
       const isCompactH = H < 800;
       const padX = Math.round(W * 0.068);
+
+      // ==================== MOLDURA EDITORIAL FORTNEWS (NOTÍCIA ESTÁTICA) ====================
+      if (studioMode === 'artes' && artFrameTemplate === 'fortnews_editorial') {
+        const bgImg = await loadImg(bgImageUrl);
+        if (cancelled) return;
+
+        const accent = topBarColor || '#fa6607';
+        const topAccentH = showTopBar ? Math.max(16, Math.round(H * 0.0155)) : 0;
+        const footerBarH = showFooterBar ? Math.round(H * (isCompactH ? 0.095 : 0.062)) : 0;
+        const photoH = Math.round(H * (isCompactH ? 0.45 : H >= 1600 ? 0.48 : 0.54));
+        const photoY = topAccentH;
+        const photoBottomY = photoY + photoH;
+
+        // 1. Clean Editorial Off-White Canvas
+        ctx.fillStyle = '#F7F7F9';
+        ctx.fillRect(0, 0, W, H);
+
+        // 2. Top Solid Orange Bar
+        if (topAccentH > 0) {
+          ctx.fillStyle = accent;
+          ctx.fillRect(0, 0, W, topAccentH);
+        }
+
+        // 3. Top Full-Bleed Photo Viewport with Zoom + Bottom Warm Orange Fade
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, photoY, W, photoH);
+        ctx.clip();
+
+        ctx.fillStyle = '#18181B';
+        ctx.fillRect(0, photoY, W, photoH);
+
+        if (bgImg) {
+          const scale = Math.max(W / bgImg.width, photoH / bgImg.height) * (photoZoom / 100);
+          const dw = bgImg.width * scale;
+          const dh = bgImg.height * scale;
+          const dx = (W - dw) / 2;
+          const dy = photoY + (photoH - dh) / 2;
+          ctx.drawImage(bgImg, dx, dy, dw, dh);
+        }
+
+        // Bottom warm orange gradient fade matching Padrão de Notícias FortNews
+        const fadeH = Math.round(photoH * 0.25);
+        const fadeGrad = ctx.createLinearGradient(0, photoBottomY - fadeH, 0, photoBottomY);
+        fadeGrad.addColorStop(0, hexToRgba(accent, 0));
+        fadeGrad.addColorStop(0.55, hexToRgba(accent, 0.62));
+        fadeGrad.addColorStop(1, hexToRgba(accent, 0.96));
+        ctx.fillStyle = fadeGrad;
+        ctx.fillRect(0, photoBottomY - fadeH, W, fadeH);
+        ctx.restore();
+
+        // 4. Centered FortNews Waveform + Diagonal Orange/Grey Badge straddling the photo seam
+        const baseBadgeScale = (W / 1080) * (isCompactH ? 0.72 : 1) * (editorialLogoScale / 100);
+        drawEditorialFortNewsSeamBadge(ctx, W / 2, photoBottomY, baseBadgeScale, accent);
+
+        // 5. White Card Editorial Content (City + Category Pill + Bold Uppercase Headline + Lead)
+        const edPadX = Math.round(W * 0.056);
+        const maxTextW = W - edPadX * 2;
+        const badgeOverhang = Math.round(52 * baseBadgeScale);
+        let cursorY = photoBottomY + badgeOverhang + Math.round(H * (isCompactH ? 0.025 : 0.036));
+        const contentMaxY = H - footerBarH - Math.round(H * 0.022);
+
+        // City + Orange Category Pill Row
+        if (showCity || showBadge) {
+          const metaFontPx = Math.round((isCompactH ? 24 : 33) * (W / 1080));
+          const pillH = Math.round(metaFontPx * 1.72);
+          let rowX = edPadX;
+
+          if (showCity && cityText.trim()) {
+            const cleanCity = cityText.trim().split('·')[0].trim().toUpperCase();
+            ctx.fillStyle = '#09090B';
+            ctx.font = `900 ${metaFontPx}px "Plus Jakarta Sans", Inter, sans-serif`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(cleanCity, rowX, cursorY + pillH / 2);
+            rowX += ctx.measureText(cleanCity).width + Math.round(24 * (W / 1080));
+          }
+
+          if (showBadge && badgeText.trim()) {
+            const catLabel = badgeText.trim().toUpperCase();
+            ctx.font = `900 ${Math.round(metaFontPx * 0.96)}px "Plus Jakarta Sans", Inter, sans-serif`;
+            const pillTextW = ctx.measureText(catLabel).width;
+            const pillW = Math.min(W - edPadX - rowX - 18, pillTextW + Math.round(44 * (W / 1080)));
+            const pillRadius = Math.round(pillH * 0.34);
+
+            // Subtle stacked right accent cap matching official FortNews reference
+            ctx.fillStyle = hexToRgba(badgeBgColor || accent, 0.88);
+            drawRoundedPill(ctx, rowX + 16, cursorY + 2, pillW, pillH - 4, pillRadius);
+            ctx.fill();
+
+            ctx.fillStyle = badgeBgColor || accent;
+            drawRoundedPill(ctx, rowX, cursorY, pillW, pillH, pillRadius);
+            ctx.fill();
+
+            ctx.fillStyle = badgeTextColor || '#FFFFFF';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(catLabel, rowX + pillW / 2, cursorY + pillH / 2 + 1, pillW - 24);
+          }
+
+          cursorY += pillH + Math.round(H * (isCompactH ? 0.022 : 0.028));
+        }
+
+        // Bold Uppercase Editorial Headline (auto-contrasted dark ink on white card)
+        const headInk = isLightHexColor(headlineColor) ? '#09090B' : headlineColor;
+        const headPx = Math.round(
+          (isCompactH ? headlineSize * 0.62 : headlineSize * 0.92) * (W / 1080)
+        );
+        ctx.fillStyle = headInk;
+        ctx.font = `900 ${headPx}px "Plus Jakarta Sans", Inter, sans-serif`;
+        ctx.textAlign = textAlign;
+        ctx.textBaseline = 'top';
+        const anchorX = textAlign === 'center' ? W / 2 : edPadX;
+
+        const headLines = wrapLines(
+          ctx,
+          (headlineText || 'MANCHETE FORTNEWS').toUpperCase(),
+          maxTextW
+        ).slice(0, isCompactH ? 2 : 4);
+        const headLineH = Math.round(headPx * 1.13);
+        for (const line of headLines) {
+          if (cursorY + headLineH > contentMaxY) break;
+          ctx.fillText(line, anchorX, cursorY);
+          cursorY += headLineH;
+        }
+
+        // Clean Regular Editorial Lead / Summary
+        if (showSubtitle && subtitleText.trim() && cursorY + 28 < contentMaxY) {
+          cursorY += Math.round(H * (isCompactH ? 0.016 : 0.018));
+          const subInk = isLightHexColor(subtitleColor) ? '#18181B' : subtitleColor;
+          const subPx = Math.round(
+            (isCompactH ? subtitleSize * 0.72 : Math.max(30, subtitleSize * 1.12)) * (W / 1080)
+          );
+          ctx.fillStyle = subInk;
+          ctx.font = `500 ${subPx}px "Plus Jakarta Sans", Inter, system-ui, sans-serif`;
+          ctx.textAlign = textAlign;
+          ctx.textBaseline = 'top';
+          const subLineH = Math.round(subPx * 1.32);
+          const remainingH = contentMaxY - cursorY;
+          const maxSubLines = Math.max(1, Math.floor(remainingH / subLineH));
+          const subLines = wrapLines(ctx, subtitleText, maxTextW).slice(0, maxSubLines);
+          for (const line of subLines) {
+            ctx.fillText(line, anchorX, cursorY);
+            cursorY += subLineH;
+          }
+        }
+
+        // 6. Official Diagonal Split Footer Bar (Orange Slanted URL Left + White Slogan Right)
+        if (showFooterBar && footerBarH > 0) {
+          const fy = H - footerBarH;
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, fy, W, footerBarH);
+
+          // Thin orange top & bottom rules on the white right side
+          ctx.fillStyle = accent;
+          ctx.fillRect(0, fy, W, 3);
+          ctx.fillRect(0, H - 5, W, 5);
+
+          // Slanted orange left trapezoid
+          const topSplitX = Math.round(W * 0.465);
+          const botSplitX = Math.round(W * 0.51);
+          ctx.beginPath();
+          ctx.moveTo(0, fy);
+          ctx.lineTo(topSplitX, fy);
+          ctx.quadraticCurveTo(topSplitX + 16, fy, topSplitX + 26, fy + 24);
+          ctx.lineTo(botSplitX, H);
+          ctx.lineTo(0, H);
+          ctx.closePath();
+          ctx.fillStyle = accent;
+          ctx.fill();
+
+          // Portal URL inside orange trapezoid
+          const cleanPortal = (footerText || newsPortalSettings.domain || 'www.jornalfortnews.com.br')
+            .replace(/^leia\s+(mais|completo)\s+em\s+/i, '')
+            .trim();
+          const displayDomain = cleanPortal.startsWith('www.') || cleanPortal.includes(' ')
+            ? cleanPortal
+            : `www.${cleanPortal}`;
+          const footerFontPx = Math.round((isCompactH ? 22 : 30) * (W / 1080));
+          ctx.fillStyle = '#FFFFFF';
+          ctx.font = `600 ${footerFontPx}px "Plus Jakarta Sans", Inter, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(displayDomain, topSplitX / 2 + 8, fy + footerBarH / 2 + 1, topSplitX - 36);
+
+          // Two-tone slogan on right white area ("Informação que" black + "conecta você" grey)
+          const rawSlogan = (editorialFooterSlogan || 'Informação que conecta você').trim();
+          const sWords = rawSlogan.split(/\s+/);
+          const splitAt = sWords.length >= 3 ? Math.ceil(sWords.length / 2) : 1;
+          const part1 = sWords.slice(0, splitAt).join(' ') + (sWords.length > 1 ? ' ' : '');
+          const part2 = sWords.slice(splitAt).join(' ');
+
+          ctx.font = `500 ${footerFontPx}px "Plus Jakarta Sans", Inter, sans-serif`;
+          const w1 = ctx.measureText(part1).width;
+          const w2 = ctx.measureText(part2).width;
+          const totalW = w1 + w2;
+          const rightCenter = botSplitX + (W - botSplitX) / 2 - 4;
+          const startX = Math.max(botSplitX + 14, rightCenter - totalW / 2);
+
+          ctx.textAlign = 'left';
+          ctx.fillStyle = '#09090B';
+          ctx.fillText(part1, startX, fy + footerBarH / 2 + 1);
+          if (part2) {
+            ctx.fillStyle = '#9CA3AF';
+            ctx.fillText(part2, startX + w1, fy + footerBarH / 2 + 1);
+          }
+        }
+
+        // Optional Outer Border
+        if (showOuterBorder && outerBorderThickness > 0) {
+          ctx.strokeStyle = outerBorderColor;
+          ctx.lineWidth = outerBorderThickness;
+          ctx.strokeRect(
+            outerBorderThickness / 2,
+            outerBorderThickness / 2,
+            W - outerBorderThickness,
+            H - outerBorderThickness
+          );
+        }
+
+        return;
+      }
 
       // 1. Base Fill
       ctx.fillStyle = bgColor;
@@ -1134,6 +1504,9 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
     guestPhotoScale,
     hostPhotoScale,
     programLogoScale,
+    artFrameTemplate,
+    editorialLogoScale,
+    editorialFooterSlogan,
     newsPortalSettings.domain,
   ]);
 
@@ -1881,6 +2254,87 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
                           />
                           Exibir Botão Play Central na Capa
                         </label>
+                      </div>
+                    )}
+
+                    {/* MOLDURA NOTÍCIA ESTÁTICA SELECTOR (ARTES MODE) */}
+                    {studioMode === 'artes' && (
+                      <div className="rounded-lg border border-white/10 bg-[#0A0A0A] p-3.5 space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold text-zinc-200">
+                            Estilo / Moldura da Notícia Estática
+                          </span>
+                          <span className="font-mono text-[10px] text-zinc-400">
+                            {ALL_FORMAT_SPECS[formatId].w}×{ALL_FORMAT_SPECS[formatId].h}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <button
+                            type="button"
+                            onClick={() => setArtFrameTemplate('classic')}
+                            className={`rounded-lg border p-2.5 text-left transition-colors cursor-pointer ${
+                              artFrameTemplate === 'classic'
+                                ? 'border-[#fa6607] bg-[#fa6607]/15 text-white'
+                                : 'border-white/10 bg-[#121215] text-zinc-300 hover:border-white/25'
+                            }`}
+                          >
+                            <div className="text-[11px] font-bold">Padrão Clássico</div>
+                            <p className="mt-0.5 text-[10px] text-zinc-400">
+                              Foto em tela cheia com máscara de contraste e texto sobreposto.
+                            </p>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setArtFrameTemplate('fortnews_editorial')}
+                            className={`rounded-lg border p-2.5 text-left transition-colors cursor-pointer ${
+                              artFrameTemplate === 'fortnews_editorial'
+                                ? 'border-[#fa6607] bg-[#fa6607]/15 text-white'
+                                : 'border-white/10 bg-[#121215] text-zinc-300 hover:border-white/25'
+                            }`}
+                          >
+                            <div className="text-[11px] font-bold">Moldura Notícia FortNews</div>
+                            <p className="mt-0.5 text-[10px] text-zinc-400">
+                              Foto superior com degradê laranja, selo FortNews central, card branco editorial e rodapé diagonal.
+                            </p>
+                          </button>
+                        </div>
+
+                        {artFrameTemplate === 'fortnews_editorial' && (
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 pt-1 border-t border-white/10">
+                            <div>
+                              <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
+                                <span>Tamanho do Selo FortNews</span>
+                                <span className="font-mono font-semibold text-[#fa6607] tabular-nums">
+                                  {editorialLogoScale}%
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                aria-label="Tamanho do selo FortNews na moldura estática"
+                                min={70}
+                                max={145}
+                                step={5}
+                                value={editorialLogoScale}
+                                onChange={(e) => setEditorialLogoScale(Number(e.target.value))}
+                                className="w-full accent-[#fa6607] cursor-pointer"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-zinc-400 mb-1">
+                                Slogan no Rodapé Direito
+                              </label>
+                              <input
+                                type="text"
+                                value={editorialFooterSlogan}
+                                onChange={(e) => setEditorialFooterSlogan(e.target.value)}
+                                placeholder="Informação que conecta você"
+                                className="w-full rounded border border-white/15 bg-[#121215] px-2.5 py-1 text-[11px] text-white"
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -2651,6 +3105,36 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
               Prévia em Alta Resolução ({ALL_FORMAT_SPECS[formatId].label})
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {studioMode === 'artes' && (
+                <div
+                  className="inline-flex rounded-lg border border-white/15 bg-[#0A0A0A] p-0.5 text-[11px]"
+                  role="group"
+                  aria-label="Modelo de moldura para notícia estática"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setArtFrameTemplate('classic')}
+                    className={`rounded-md px-2.5 py-1 font-semibold whitespace-nowrap cursor-pointer ${
+                      artFrameTemplate === 'classic'
+                        ? 'bg-[#fa6607] text-white'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Clássico
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setArtFrameTemplate('fortnews_editorial')}
+                    className={`rounded-md px-2.5 py-1 font-semibold whitespace-nowrap cursor-pointer ${
+                      artFrameTemplate === 'fortnews_editorial'
+                        ? 'bg-[#fa6607] text-white'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Moldura Notícia FortNews
+                  </button>
+                </div>
+              )}
               {studioMode === 'capas' && uploadedVideoUrl && (
                 <div className="inline-flex rounded-lg border border-white/15 bg-[#0A0A0A] p-0.5 text-[11px]">
                   <button

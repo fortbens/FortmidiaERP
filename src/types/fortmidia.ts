@@ -646,6 +646,9 @@ export interface MarketingArtPreset {
   hostPhotoScale: number;
   programLogoUrl?: string;
   bgImageUrl?: string;
+  artFrameTemplate?: 'classic' | 'fortnews_editorial';
+  editorialLogoScale?: number;
+  editorialFooterSlogan?: string;
   lockedBySuperAdmin: boolean;
   updatedBy: string;
   updatedAt: string;
