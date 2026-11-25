@@ -11,6 +11,7 @@ import {
   isVideoArticle,
 } from '../../utils/videoEmbed';
 import { MediaFrame } from '../MediaFrame';
+import { ResolvedVideo } from '../ResolvedVideo';
 import { SiteAdSlot } from './SiteAdSlot';
 
 interface NewsSectionProps {
@@ -475,7 +476,7 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
                       className="h-full w-full border-0"
                     />
                   ) : (
-                    <video
+                    <ResolvedVideo
                       key={activeShowcaseVideo.id}
                       controls
                       playsInline
@@ -611,7 +612,7 @@ export const NewsSection: React.FC<NewsSectionProps> = ({ onOpenFortNews }) => {
                           className="h-full w-full border-0"
                         />
                       ) : (
-                        <video
+                        <ResolvedVideo
                           controls
                           playsInline
                           poster={posterUrl}

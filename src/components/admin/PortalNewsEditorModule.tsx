@@ -30,6 +30,7 @@ import {
   SocialCreativeDraft,
 } from '../../types/fortmidia';
 import { MediaFrame } from '../MediaFrame';
+import { ResolvedVideo } from '../ResolvedVideo';
 import { FortNewsLogo, OFFICIAL_FORTNEWS_LOGO_URL } from '../FortMidiaLogo';
 import {
   getArticlePosterUrl,
@@ -38,6 +39,7 @@ import {
   isVideoArticle,
 } from '../../utils/videoEmbed';
 import { processUploadedPhoto } from '../../utils/imageUpload';
+import { isLocalVideoUri, uploadVideoFile } from '../../utils/videoUpload';
 
 interface PortalNewsEditorModuleProps {
   onOpenFortNewsPortal: () => void;
@@ -78,6 +80,7 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     chiefEditorApprovePauta,
     publishPautaToSite,
     unpublishPauta,
+    apiSyncError,
   } = useFortMidia();
 
   const activeUser =
@@ -119,6 +122,14 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     height: number;
     sizeKb: number;
   } | null>(null);
+  const [videoUploading, setVideoUploading] = useState(false);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoMeta, setVideoMeta] = useState<{
+    fileName: string;
+    sizeMb: number;
+    storage: 'server' | 'local';
+  } | null>(null);
+  const [editorError, setEditorError] = useState<string | null>(null);
   const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
@@ -185,6 +196,9 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     setVideoUrl('');
     setPhotoMeta(null);
     setPhotoError(null);
+    setVideoMeta(null);
+    setVideoError(null);
+    setEditorError(null);
     setPendingSources([]);
     setPendingSocial(undefined);
     setIsAiOrigin(false);
@@ -203,6 +217,9 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     setVideoUrl(art.videoUrl || '');
     setPhotoMeta(null);
     setPhotoError(null);
+    setVideoMeta(null);
+    setVideoError(null);
+    setEditorError(null);
     setPendingSources(art.sourceUrls || []);
     setPendingSocial(art.socialCreative);
     setIsAiOrigin(Boolean(art.aiGenerated));
@@ -222,6 +239,9 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     setVideoUrl('');
     setPhotoMeta(null);
     setPhotoError(null);
+    setVideoMeta(null);
+    setVideoError(null);
+    setEditorError(null);
     setPendingSources(draft.sources || []);
     setPendingSocial(draft.socialCreative);
     setIsAiOrigin(true);
@@ -286,19 +306,41 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
   };
 
   const handleSaveArticle = (targetMode: 'approval_queue' | 'publish_now') => {
-    if (!title.trim() || !summary.trim()) {
-      flash('Preencha ao menos o Título da Manchete e o Resumo (Linha Fina).');
+    setEditorError(null);
+
+    if (videoUploading || photoUploading) {
+      const waitMsg = 'Aguarde o envio da mídia concluir antes de enviar a matéria.';
+      setEditorError(waitMsg);
+      flash(waitMsg);
       return;
     }
+
+    if (!title.trim()) {
+      const msg = 'Preencha o Título da Manchete antes de enviar para o Redator-Chefe ou publicar.';
+      setEditorError(msg);
+      flash(msg);
+      return;
+    }
+
+    const trimmedVideo = videoUrl.trim();
+    const resolvedMediaType: 'image' | 'video' =
+      mediaType === 'video' ? 'video' : 'image';
+
+    if (resolvedMediaType === 'video' && !trimmedVideo) {
+      const msg = 'Envie um arquivo de vídeo (Subir Vídeo) ou cole um link do YouTube, Vimeo ou MP4.';
+      setEditorError(msg);
+      flash(msg);
+      return;
+    }
+
+    const resolvedSummary = summary.trim() || title.trim();
+    const resolvedBody = body.trim() || resolvedSummary;
 
     const nowStamp = `${new Date().toLocaleDateString('pt-BR')} · ${new Date().toLocaleTimeString(
       'pt-BR',
       { hour: '2-digit', minute: '2-digit' }
     )}`;
 
-    const trimmedVideo = videoUrl.trim();
-    const resolvedMediaType: 'image' | 'video' =
-      mediaType === 'video' ? 'video' : 'image';
     const ytThumb = getYouTubeThumbnailUrl(trimmedVideo);
     const isDefaultPreset = IMAGE_PRESETS.some((p) => p.url === imageUrl);
     const resolvedImageUrl =
@@ -306,14 +348,17 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
         ? ytThumb
         : imageUrl.trim() || ytThumb || undefined;
 
+    const targetApprovalStatus: ChiefApprovalStatus =
+      targetMode === 'publish_now' ? 'Publicada no Site' : 'Aguardando Redator-Chefe';
+
     if (editingPautaId) {
       updatePautaContent(editingPautaId, {
         title: title.trim(),
         city,
         seal,
         reporter: reporter.trim() || 'Redação Portal FortNews',
-        summary: summary.trim(),
-        body: body.trim() || summary.trim(),
+        summary: resolvedSummary,
+        body: resolvedBody,
         imageUrl: resolvedImageUrl,
         mediaType: resolvedMediaType,
         videoUrl: resolvedMediaType === 'video' ? trimmedVideo || undefined : undefined,
@@ -331,12 +376,20 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
               status: 'Edição & Cortes',
             }),
       });
+      if (statusFilter !== 'Todas' && statusFilter !== targetApprovalStatus) {
+        setStatusFilter('Todas');
+      }
+      if (cityFilter !== 'Todas' && cityFilter !== city) {
+        setCityFilter('Todas');
+      }
       flash(
         targetMode === 'publish_now'
           ? resolvedMediaType === 'video'
             ? 'Matéria em VÍDEO atualizada e PUBLICADA no Portal FortNews e no site FortMídia!'
             : 'Matéria atualizada e PUBLICADA no Portal FortNews e no site FortMídia!'
-          : 'Edições salvas e enviadas para aprovação do Redator-Chefe.'
+          : resolvedMediaType === 'video'
+            ? 'Matéria em VÍDEO atualizada e enviada para a esteira do Redator-Chefe!'
+            : 'Edições salvas e enviadas para aprovação do Redator-Chefe.'
       );
       resetEditor();
       return;
@@ -350,13 +403,12 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
       reporter: reporter.trim() || 'Redação Portal FortNews',
       deadline: new Date().toLocaleDateString('pt-BR'),
       status: targetMode === 'publish_now' ? 'Publicado' : 'Edição & Cortes',
-      approvalStatus:
-        targetMode === 'publish_now' ? 'Publicada no Site' : 'Aguardando Redator-Chefe',
+      approvalStatus: targetApprovalStatus,
       approvedBy:
         targetMode === 'publish_now' ? `${chiefName} (Editor-Chefe)` : undefined,
       publishedAt: targetMode === 'publish_now' ? nowStamp : undefined,
-      summary: summary.trim(),
-      body: body.trim() || summary.trim(),
+      summary: resolvedSummary,
+      body: resolvedBody,
       imageUrl: resolvedImageUrl,
       mediaType: resolvedMediaType,
       videoUrl: resolvedMediaType === 'video' ? trimmedVideo || undefined : undefined,
@@ -365,12 +417,22 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
       socialCreative: pendingSocial,
     });
 
+    // Garante que a nova matéria fique imediatamente visível na esteira ao lado
+    if (statusFilter !== 'Todas' && statusFilter !== targetApprovalStatus) {
+      setStatusFilter('Todas');
+    }
+    if (cityFilter !== 'Todas' && cityFilter !== city) {
+      setCityFilter('Todas');
+    }
+
     flash(
       targetMode === 'publish_now'
         ? resolvedMediaType === 'video'
           ? 'Nova matéria em VÍDEO publicada imediatamente no Portal Jornal FortNews e na FortMídia!'
           : 'Nova matéria publicada imediatamente no Portal Jornal FortNews!'
-        : 'Matéria incluída e enviada para fila do Redator-Chefe.'
+        : resolvedMediaType === 'video'
+          ? 'Matéria em VÍDEO enviada para a esteira do Redator-Chefe com sucesso!'
+          : 'Matéria incluída e enviada para fila do Redator-Chefe.'
     );
     resetEditor();
   };
@@ -423,19 +485,51 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     await applyPhotoFile(file);
   };
 
-  const handleUploadVideo = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUploadVideo = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setVideoUrl(reader.result);
-        setMediaType('video');
-        flash('Vídeo carregado na matéria. Ele será padronizado no card e reproduzido no leitor.');
+
+    setVideoUploading(true);
+    setVideoError(null);
+    setEditorError(null);
+    try {
+      const uploaded = await uploadVideoFile(file);
+      setVideoUrl(uploaded.videoUrl);
+      setMediaType('video');
+      setVideoMeta({
+        fileName: uploaded.fileName,
+        sizeMb: uploaded.sizeMb,
+        storage: uploaded.storage,
+      });
+
+      const isPresetOrEmpty = !imageUrl.trim() || IMAGE_PRESETS.some((p) => p.url === imageUrl);
+      const nextPoster = uploaded.posterDataUrl && isPresetOrEmpty ? uploaded.posterDataUrl : undefined;
+      if (nextPoster) {
+        setImageUrl(nextPoster);
       }
-    };
-    reader.readAsDataURL(file);
+
+      if (editingPautaId) {
+        updatePautaContent(editingPautaId, {
+          mediaType: 'video',
+          videoUrl: uploaded.videoUrl,
+          ...(nextPoster ? { imageUrl: nextPoster } : {}),
+        });
+      }
+
+      flash(
+        uploaded.storage === 'server'
+          ? `Vídeo "${uploaded.fileName}" (${uploaded.sizeMb} MB) enviado ao servidor e pronto na matéria!`
+          : `Vídeo "${uploaded.fileName}" (${uploaded.sizeMb} MB) carregado com sucesso! Clique em "Enviar p/ Redator-Chefe" ou "Aprovar & Publicar".`
+      );
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Não foi possível enviar o vídeo selecionado.';
+      setVideoError(msg);
+      flash(msg);
+    } finally {
+      setVideoUploading(false);
+    }
   };
 
   return (
@@ -781,10 +875,10 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
             </div>
 
             {mediaType === 'video' && (
-              <div className="space-y-2 border-b border-white/10 pb-3">
+              <div className="space-y-2.5 border-b border-white/10 pb-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="block text-[11px] text-[#D4AF37]">
-                    Arquivo de Vídeo (MP4/WebM) ou Link YouTube / Vimeo / Reels
+                    Arquivo de Vídeo (MP4/WebM/MOV) ou Link YouTube / Vimeo / Reels
                   </label>
                   {getYouTubeThumbnailUrl(videoUrl) && (
                     <button
@@ -799,37 +893,130 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
                     </button>
                   )}
                 </div>
+
+                <input
+                  ref={videoInputRef}
+                  type="file"
+                  accept="video/mp4,video/webm,video/quicktime,video/*"
+                  className="hidden"
+                  onChange={handleUploadVideo}
+                />
+
+                {videoUrl.trim() && (
+                  <div className="overflow-hidden rounded-lg border border-white/15 bg-black">
+                    <div className="aspect-video max-h-48 w-full bg-black">
+                      {getVideoEmbedUrl(videoUrl) ? (
+                        <iframe
+                          src={getVideoEmbedUrl(videoUrl) || undefined}
+                          title={title || 'Pré-visualização do vídeo'}
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          allowFullScreen
+                          className="h-full w-full border-0"
+                        />
+                      ) : (
+                        <ResolvedVideo
+                          src={videoUrl}
+                          poster={imageUrl || getYouTubeThumbnailUrl(videoUrl) || undefined}
+                          controls
+                          playsInline
+                          className="h-full w-full object-contain"
+                        />
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-[#121215] px-3 py-2 text-[11px]">
+                      <span className="inline-flex items-center gap-1.5 text-emerald-300 font-medium min-w-0 truncate">
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                        {videoMeta
+                          ? `${videoMeta.fileName} (${videoMeta.sizeMb} MB · ${
+                              videoMeta.storage === 'server' ? 'Servidor' : 'Carregado'
+                            })`
+                          : isLocalVideoUri(videoUrl)
+                            ? 'Vídeo anexado e pronto para enviar'
+                            : 'Vídeo vinculado à matéria'}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => videoInputRef.current?.click()}
+                          disabled={videoUploading}
+                          className="rounded bg-[#FF6600] px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-[#e55a00] cursor-pointer disabled:opacity-60"
+                        >
+                          Trocar Vídeo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setVideoUrl('');
+                            setVideoMeta(null);
+                            setVideoError(null);
+                          }}
+                          className="rounded border border-white/15 px-2 py-0.5 text-[10px] text-zinc-300 hover:bg-white/5 cursor-pointer"
+                        >
+                          Remover
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {videoError && (
+                  <div className="rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                    {videoError}
+                  </div>
+                )}
+
                 <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={videoUrl}
-                    onChange={(e) => {
-                      const nextVal = e.target.value;
-                      setVideoUrl(nextVal);
-                      if (nextVal.trim()) setMediaType('video');
-                      const ytThumb = getYouTubeThumbnailUrl(nextVal);
-                      const isPreset = IMAGE_PRESETS.some((p) => p.url === imageUrl);
-                      if (ytThumb && (!imageUrl.trim() || isPreset)) {
-                        setImageUrl(ytThumb);
-                      }
-                    }}
-                    placeholder="https://youtube.com/watch?v=..., Vimeo, Reels ou MP4"
-                    className="flex-1 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white"
-                  />
-                  <input
-                    ref={videoInputRef}
-                    type="file"
-                    accept="video/mp4,video/webm,video/quicktime"
-                    className="hidden"
-                    onChange={handleUploadVideo}
-                  />
+                  {videoUrl.startsWith('data:video/') || isLocalVideoUri(videoUrl) || videoUrl.startsWith('/uploads/videos/') ? (
+                    <div className="flex flex-1 items-center justify-between gap-2 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 min-w-0">
+                      <span className="truncate">
+                        {videoMeta
+                          ? `Vídeo pronto: ${videoMeta.fileName} (${videoMeta.sizeMb} MB)`
+                          : 'Arquivo de vídeo carregado na matéria'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVideoUrl('');
+                          setVideoMeta(null);
+                        }}
+                        className="shrink-0 text-[11px] font-semibold text-zinc-200 underline hover:text-white cursor-pointer"
+                      >
+                        Usar Link
+                      </button>
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      value={videoUrl}
+                      onChange={(e) => {
+                        const nextVal = e.target.value;
+                        setVideoUrl(nextVal);
+                        setVideoMeta(null);
+                        setVideoError(null);
+                        setEditorError(null);
+                        if (nextVal.trim()) setMediaType('video');
+                        const ytThumb = getYouTubeThumbnailUrl(nextVal);
+                        const isPreset = IMAGE_PRESETS.some((p) => p.url === imageUrl);
+                        if (ytThumb && (!imageUrl.trim() || isPreset)) {
+                          setImageUrl(ytThumb);
+                        }
+                      }}
+                      placeholder="https://youtube.com/watch?v=..., Vimeo, Reels ou MP4"
+                      className="flex-1 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white"
+                    />
+                  )}
                   <button
                     type="button"
                     onClick={() => videoInputRef.current?.click()}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#FF6600]/40 bg-[#FF6600]/10 px-3 py-2 text-xs font-medium text-[#FF6600] hover:bg-[#FF6600]/20 cursor-pointer shrink-0"
+                    disabled={videoUploading}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#FF6600]/40 bg-[#FF6600]/10 px-3 py-2 text-xs font-medium text-[#FF6600] hover:bg-[#FF6600]/20 cursor-pointer shrink-0 disabled:opacity-60"
                   >
-                    <Upload className="h-3.5 w-3.5" />
-                    Subir Vídeo
+                    {videoUploading ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Upload className="h-3.5 w-3.5" />
+                    )}
+                    {videoUploading ? 'Subindo Vídeo...' : 'Subir Vídeo'}
                   </button>
                 </div>
               </div>
@@ -1009,6 +1196,12 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
             </div>
           </div>
 
+          {(editorError || apiSyncError) && (
+            <div className="rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+              {editorError || apiSyncError}
+            </div>
+          )}
+
           <div className="flex flex-col sm:flex-row flex-wrap gap-2.5 pt-2">
             <button
               type="button"
@@ -1020,19 +1213,21 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
             </button>
             <button
               type="button"
+              disabled={videoUploading || photoUploading}
               onClick={() => handleSaveArticle('approval_queue')}
-              className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 bg-[#0A0A0A] px-4 py-2.5 text-xs font-semibold text-white hover:bg-white/5 cursor-pointer"
+              className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 bg-[#0A0A0A] px-4 py-2.5 text-xs font-semibold text-white hover:bg-white/5 cursor-pointer disabled:opacity-60"
             >
               <Send className="h-3.5 w-3.5 text-[#D4AF37]" />
-              Enviar p/ Redator-Chefe
+              {videoUploading ? 'Enviando Vídeo...' : 'Enviar p/ Redator-Chefe'}
             </button>
             <button
               type="button"
+              disabled={videoUploading || photoUploading}
               onClick={() => handleSaveArticle('publish_now')}
-              className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#e55a00] cursor-pointer"
+              className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#e55a00] cursor-pointer disabled:opacity-60"
             >
               <Check className="h-3.5 w-3.5" />
-              Aprovar &amp; Publicar no Site
+              {videoUploading ? 'Aguarde o Vídeo...' : 'Aprovar & Publicar no Site'}
             </button>
           </div>
         </section>
@@ -1286,7 +1481,7 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
                       className="h-full w-full border-0"
                     />
                   ) : (
-                    <video
+                    <ResolvedVideo
                       src={videoUrl}
                       poster={imageUrl || getYouTubeThumbnailUrl(videoUrl) || undefined}
                       controls

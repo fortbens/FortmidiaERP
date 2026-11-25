@@ -33,6 +33,7 @@ import {
   isVideoArticle,
 } from '../../utils/videoEmbed';
 import { MediaFrame } from '../MediaFrame';
+import { ResolvedVideo } from '../ResolvedVideo';
 import { FortNewsLogo, isOfficialFortNewsLogo } from '../FortMidiaLogo';
 import { SiteAdSlot } from './SiteAdSlot';
 
@@ -693,7 +694,7 @@ export const FortNewsPortal: React.FC<FortNewsPortalProps> = ({
                             className="h-full w-full border-0"
                           />
                         ) : (
-                          <video
+                          <ResolvedVideo
                             controls
                             playsInline
                             poster={posterUrl}
@@ -983,7 +984,7 @@ export const FortNewsPortal: React.FC<FortNewsPortalProps> = ({
                               className="h-full w-full border-0"
                             />
                           ) : (
-                            <video
+                            <ResolvedVideo
                               key={activeTvVideo.id}
                               controls
                               playsInline

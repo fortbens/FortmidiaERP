@@ -46,6 +46,8 @@ import {
   isVideoArticle,
 } from '../../utils/videoEmbed';
 import { processUploadedPhoto } from '../../utils/imageUpload';
+import { uploadVideoFile } from '../../utils/videoUpload';
+import { ResolvedVideo } from '../ResolvedVideo';
 
 const PAUTA_STATUSES: PautaStatus[] = [
   'Apuração de Rua',
@@ -293,23 +295,24 @@ export const JournalismModule: React.FC = () => {
     }
   };
 
-  const handleVideoUpload = (
+  const handleVideoUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
-    cb: (dataUrl: string) => void
+    cb: (videoUrl: string, posterDataUrl?: string) => void
   ) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    if (file.size > 15 * 1024 * 1024) {
+    try {
+      const uploaded = await uploadVideoFile(file);
+      cb(uploaded.videoUrl, uploaded.posterDataUrl);
       setTriageFeedback(
-        'Para vídeos acima de 15 MB, hospede no YouTube, Vimeo ou servidor MP4 e cole o link.'
+        `Vídeo "${uploaded.fileName}" (${uploaded.sizeMb} MB) carregado e pronto na matéria.`
       );
-      return;
+    } catch (err) {
+      setTriageFeedback(
+        err instanceof Error ? err.message : 'Não foi possível carregar o vídeo selecionado.'
+      );
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') cb(reader.result);
-    };
-    reader.readAsDataURL(file);
   };
 
   const submitNewPauta = (publishImmediately: boolean) => {
@@ -763,12 +766,19 @@ export const JournalismModule: React.FC = () => {
                     type="file"
                     accept="video/mp4,video/webm,video/quicktime"
                     className="hidden"
-                    onChange={(e) =>
-                      handleVideoUpload(e, (url) => {
+                    onChange={(e) => {
+                      void handleVideoUpload(e, (url, poster) => {
                         setNewVideoUrl(url);
                         setNewMediaType('video');
-                      })
-                    }
+                        if (
+                          poster &&
+                          (!newImageUrl.trim() ||
+                            newImageUrl.trim() === '/assets/aistudio/outdoor_6fc8fbe7.jpg')
+                        ) {
+                          setNewImageUrl(poster);
+                        }
+                      });
+                    }}
                   />
                 </label>
               </div>
@@ -1530,19 +1540,23 @@ export const JournalismModule: React.FC = () => {
                         type="file"
                         accept="video/mp4,video/webm,video/quicktime"
                         className="hidden"
-                        onChange={(e) =>
-                          handleVideoUpload(e, (url) => {
+                        onChange={(e) => {
+                          void handleVideoUpload(e, (url, poster) => {
+                            const nextImage =
+                              poster && !reviewingArticle.imageUrl ? poster : reviewingArticle.imageUrl;
                             setReviewingArticle({
                               ...reviewingArticle,
                               mediaType: 'video',
                               videoUrl: url,
+                              imageUrl: nextImage,
                             });
                             updatePautaContent(reviewingArticle.id, {
                               mediaType: 'video',
                               videoUrl: url,
+                              ...(poster && !reviewingArticle.imageUrl ? { imageUrl: poster } : {}),
                             });
-                          })
-                        }
+                          });
+                        }}
                       />
                     </label>
                   </div>
@@ -1558,7 +1572,7 @@ export const JournalismModule: React.FC = () => {
                           className="h-full w-full border-0"
                         />
                       ) : (
-                        <video
+                        <ResolvedVideo
                           controls
                           playsInline
                           poster={reviewingArticle.imageUrl}

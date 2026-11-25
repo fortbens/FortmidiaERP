@@ -1524,6 +1524,77 @@ if ($resource === 'pautas') {
 }
 
 // ----------------------------------------------------------------------------
+// 10B. Upload de Mídia de Matérias (/api/media/upload)
+// ----------------------------------------------------------------------------
+if ($resource === 'media' && $subResource === 'upload' && $method === 'POST') {
+    $pdo = getPdo($config);
+    requireAuth($pdo);
+
+    $allowedExts = ['mp4', 'webm', 'mov', 'm4v', 'ogg'];
+    $maxBytes = 100 * 1024 * 1024; // 100 MB
+    $uploadDir = dirname(__DIR__) . '/uploads/videos';
+    if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0755, true) && !is_dir($uploadDir)) {
+        jsonResponse(500, ['error' => 'Não foi possível criar a pasta /uploads/videos no servidor.']);
+    }
+
+    $rawExt = strtolower(preg_replace('/[^a-z0-9]/i', '', (string) ($_GET['ext'] ?? 'mp4')) ?: 'mp4');
+    $ext = in_array($rawExt, $allowedExts, true) ? $rawExt : 'mp4';
+    $fileName = 'vid-' . time() . '-' . bin2hex(random_bytes(5)) . '.' . $ext;
+    $targetPath = $uploadDir . '/' . $fileName;
+
+    if (!empty($_FILES['file']) && is_uploaded_file((string) ($_FILES['file']['tmp_name'] ?? ''))) {
+        $origName = (string) ($_FILES['file']['name'] ?? '');
+        $parsedExt = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
+        if (in_array($parsedExt, $allowedExts, true)) {
+            $ext = $parsedExt;
+            $fileName = 'vid-' . time() . '-' . bin2hex(random_bytes(5)) . '.' . $ext;
+            $targetPath = $uploadDir . '/' . $fileName;
+        }
+        $size = (int) ($_FILES['file']['size'] ?? 0);
+        if ($size <= 0 || $size > $maxBytes) {
+            jsonResponse(413, ['error' => 'Arquivo de vídeo inválido ou acima de 100 MB.']);
+        }
+        if (!move_uploaded_file((string) $_FILES['file']['tmp_name'], $targetPath)) {
+            jsonResponse(500, ['error' => 'Falha ao mover arquivo de vídeo para /uploads/videos.']);
+        }
+        jsonResponse(201, ['ok' => true, 'url' => '/uploads/videos/' . $fileName, 'sizeBytes' => $size]);
+    }
+
+    $in = fopen('php://input', 'rb');
+    $out = fopen($targetPath, 'wb');
+    if ($in === false || $out === false) {
+        if (is_resource($in)) fclose($in);
+        if (is_resource($out)) fclose($out);
+        jsonResponse(500, ['error' => 'Falha ao abrir fluxo de gravação de vídeo no servidor.']);
+    }
+
+    $totalBytes = 0;
+    while (!feof($in)) {
+        $chunk = fread($in, 65536);
+        if ($chunk === false) {
+            break;
+        }
+        $totalBytes += strlen($chunk);
+        if ($totalBytes > $maxBytes) {
+            fclose($in);
+            fclose($out);
+            @unlink($targetPath);
+            jsonResponse(413, ['error' => 'O vídeo excede o limite de 100 MB.']);
+        }
+        fwrite($out, $chunk);
+    }
+    fclose($in);
+    fclose($out);
+
+    if ($totalBytes <= 0) {
+        @unlink($targetPath);
+        jsonResponse(400, ['error' => 'Nenhum dado de vídeo recebido no upload.']);
+    }
+
+    jsonResponse(201, ['ok' => true, 'url' => '/uploads/videos/' . $fileName, 'sizeBytes' => $totalBytes]);
+}
+
+// ----------------------------------------------------------------------------
 // 11. Demandas Cidadãs — Canal Fala Cidadão (/api/demandas)
 // ----------------------------------------------------------------------------
 if ($resource === 'demandas') {

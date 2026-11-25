@@ -376,6 +376,88 @@ async function startServer() {
     });
   });
 
+  // Serve uploaded media files safely (videos uploaded from Portal News Editor)
+  const uploadsRoot = path.resolve(process.cwd(), 'public', 'uploads');
+  const uploadedVideosDir = path.join(uploadsRoot, 'videos');
+  fs.mkdirSync(uploadedVideosDir, { recursive: true });
+  app.use(
+    '/uploads',
+    express.static(uploadsRoot, {
+      setHeaders: (res) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+      },
+    })
+  );
+
+  const ALLOWED_VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogg']);
+  const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+
+  app.post('/api/media/upload', (req, res) => {
+    const rawExt = String(req.query.ext || 'mp4')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+    const ext = ALLOWED_VIDEO_EXTS.has(rawExt) ? rawExt : 'mp4';
+    const contentType = String(req.headers['content-type'] || '').toLowerCase();
+    if (contentType && !contentType.startsWith('video/') && contentType !== 'application/octet-stream') {
+      res.status(415).json({ error: 'Tipo de mídia inválido. Envie um vídeo MP4, WebM ou MOV.' });
+      return;
+    }
+
+    const randomHex = Math.random().toString(16).slice(2, 10);
+    const fileName = `vid-${Date.now()}-${randomHex}.${ext}`;
+    const targetPath = path.join(uploadedVideosDir, fileName);
+
+    let totalBytes = 0;
+    let aborted = false;
+    const writeStream = fs.createWriteStream(targetPath);
+
+    const failUpload = (status: number, error: string) => {
+      if (aborted) return;
+      aborted = true;
+      writeStream.destroy();
+      fs.unlink(targetPath, () => {});
+      if (!res.headersSent) {
+        res.status(status).json({ error });
+      }
+    };
+
+    req.on('data', (chunk: Buffer) => {
+      if (aborted) return;
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_VIDEO_UPLOAD_BYTES) {
+        failUpload(413, 'O vídeo excede o limite de 100 MB.');
+        req.resume();
+        return;
+      }
+      if (!writeStream.write(chunk)) {
+        req.pause();
+        writeStream.once('drain', () => {
+          if (!aborted) req.resume();
+        });
+      }
+    });
+
+    req.on('end', () => {
+      if (aborted) return;
+      writeStream.end(() => {
+        if (aborted) return;
+        if (totalBytes === 0) {
+          fs.unlink(targetPath, () => {});
+          res.status(400).json({ error: 'Arquivo de vídeo vazio.' });
+          return;
+        }
+        res.status(201).json({
+          ok: true,
+          url: `/uploads/videos/${fileName}`,
+          sizeBytes: totalBytes,
+        });
+      });
+    });
+
+    req.on('error', () => failUpload(500, 'Erro ao receber o arquivo de vídeo.'));
+    writeStream.on('error', () => failUpload(500, 'Erro ao gravar o vídeo no servidor.'));
+  });
+
   app.get('/api/public-config', (_req, res) => {
     const mapsApiKey =
       process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '';

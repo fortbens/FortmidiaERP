@@ -3,7 +3,14 @@ export function isSafeMediaUrl(rawUrl?: string): boolean {
   const trimmed = rawUrl.trim();
   if (!trimmed) return false;
   if (trimmed.startsWith('/')) return true;
-  if (trimmed.startsWith('data:image/') || trimmed.startsWith('data:video/')) return true;
+  if (
+    trimmed.startsWith('data:image/') ||
+    trimmed.startsWith('data:video/') ||
+    trimmed.startsWith('idb://video/') ||
+    trimmed.startsWith('blob:')
+  ) {
+    return true;
+  }
   try {
     const parsed = new URL(trimmed);
     return parsed.protocol === 'https:' || parsed.protocol === 'http:';

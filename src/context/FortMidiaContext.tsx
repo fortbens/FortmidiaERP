@@ -380,6 +380,11 @@ function persistStateSafely(nextState: FortMidiaState): boolean {
     try {
       const compactState: FortMidiaState = {
         ...nextState,
+        pautas: nextState.pautas.map((p) =>
+          p.videoUrl?.startsWith('data:video/')
+            ? { ...p, videoUrl: undefined }
+            : p
+        ),
         siteSettings: {
           ...nextState.siteSettings,
           heroVideoUrl:
