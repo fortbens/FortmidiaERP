@@ -45,6 +45,7 @@ import {
   getYouTubeThumbnailUrl,
   isVideoArticle,
 } from '../../utils/videoEmbed';
+import { processUploadedPhoto } from '../../utils/imageUpload';
 
 const PAUTA_STATUSES: PautaStatus[] = [
   'Apuração de Rua',
@@ -272,17 +273,24 @@ export const JournalismModule: React.FC = () => {
     }
   };
 
-  const handleImageUpload = (
+  const handleImageUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     cb: (dataUrl: string) => void
   ) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') cb(reader.result);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const processed = await processUploadedPhoto(file);
+      cb(processed.dataUrl);
+      setTriageFeedback(
+        `Foto "${processed.fileName}" (${processed.sizeKb} KB) carregada e otimizada na matéria.`
+      );
+    } catch (err) {
+      setTriageFeedback(
+        err instanceof Error ? err.message : 'Não foi possível carregar a foto selecionada.'
+      );
+    }
   };
 
   const handleVideoUpload = (
@@ -783,25 +791,49 @@ export const JournalismModule: React.FC = () => {
                       </option>
                     ))}
                 </select>
-                <input
-                  type="text"
-                  value={newImageUrl}
-                  onChange={(e) => setNewImageUrl(e.target.value)}
-                  placeholder={
-                    newMediaType === 'video'
-                      ? 'URL da capa/poster do vídeo (opcional p/ YouTube)'
-                      : 'URL da foto de capa'
-                  }
-                  className="flex-1 min-w-[180px] rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white focus:border-[#FF6600] focus:outline-none"
-                />
-                <label className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-zinc-200 cursor-pointer">
-                  <Upload className="h-3.5 w-3.5 text-[#FF6600]" aria-hidden="true" />
+                {newImageUrl.startsWith('data:image/') ? (
+                  <div className="flex flex-1 min-w-[200px] items-center justify-between gap-2 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-200">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <img
+                        src={newImageUrl}
+                        alt="Prévia da foto enviada"
+                        className="h-7 w-10 rounded object-cover border border-white/15 shrink-0"
+                      />
+                      <span className="truncate">
+                        Foto carregada ({Math.max(1, Math.round(newImageUrl.length / 1024))} KB)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setNewImageUrl('')}
+                      className="text-[11px] text-zinc-200 underline hover:text-white shrink-0 cursor-pointer"
+                    >
+                      Limpar
+                    </button>
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    value={newImageUrl}
+                    onChange={(e) => setNewImageUrl(e.target.value)}
+                    placeholder={
+                      newMediaType === 'video'
+                        ? 'URL da capa/poster do vídeo (opcional p/ YouTube)'
+                        : 'URL da foto de capa'
+                    }
+                    className="flex-1 min-w-[180px] rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white focus:border-[#FF6600] focus:outline-none"
+                  />
+                )}
+                <label className="inline-flex items-center gap-1.5 rounded-lg border border-[#FF6600]/40 bg-[#FF6600]/15 px-3 py-2 text-xs font-semibold text-[#FF6600] hover:bg-[#FF6600]/25 cursor-pointer">
+                  <Upload className="h-3.5 w-3.5" aria-hidden="true" />
                   Foto
                   <input
                     type="file"
                     accept="image/*"
                     className="hidden"
-                    onChange={(e) => handleImageUpload(e, setNewImageUrl)}
+                    onChange={(e) => {
+                      void handleImageUpload(e, setNewImageUrl);
+                    }}
                   />
                 </label>
               </div>
@@ -1539,31 +1571,56 @@ export const JournalismModule: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex flex-wrap gap-2">
-                <input
-                  type="text"
-                  value={reviewingArticle.imageUrl || ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setReviewingArticle({ ...reviewingArticle, imageUrl: val });
-                    updatePautaContent(reviewingArticle.id, { imageUrl: val.trim() || undefined });
-                  }}
-                  placeholder="URL da foto de capa / poster"
-                  className="flex-1 min-w-[200px] rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white focus:border-[#FF6600] focus:outline-none"
-                />
-                <label className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-zinc-200 cursor-pointer shrink-0">
-                  <Upload className="h-3.5 w-3.5 text-[#FF6600]" aria-hidden="true" />
+              <div className="flex flex-wrap items-center gap-2">
+                {reviewingArticle.imageUrl?.startsWith('data:image/') ? (
+                  <div className="flex flex-1 min-w-[200px] items-center justify-between gap-2 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-200">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <img
+                        src={reviewingArticle.imageUrl}
+                        alt="Foto de capa da matéria"
+                        className="h-8 w-12 rounded object-cover border border-white/15 shrink-0"
+                      />
+                      <span className="truncate">
+                        Foto carregada ({Math.max(1, Math.round(reviewingArticle.imageUrl.length / 1024))} KB)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReviewingArticle({ ...reviewingArticle, imageUrl: '' });
+                        updatePautaContent(reviewingArticle.id, { imageUrl: undefined });
+                      }}
+                      className="text-[11px] text-zinc-200 underline hover:text-white shrink-0 cursor-pointer"
+                    >
+                      Remover
+                    </button>
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    value={reviewingArticle.imageUrl || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setReviewingArticle({ ...reviewingArticle, imageUrl: val });
+                      updatePautaContent(reviewingArticle.id, { imageUrl: val.trim() || undefined });
+                    }}
+                    placeholder="URL da foto de capa / poster"
+                    className="flex-1 min-w-[200px] rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white focus:border-[#FF6600] focus:outline-none"
+                  />
+                )}
+                <label className="inline-flex items-center gap-1.5 rounded-lg border border-[#FF6600]/40 bg-[#FF6600]/15 px-3 py-2 text-xs font-semibold text-[#FF6600] hover:bg-[#FF6600]/25 cursor-pointer shrink-0">
+                  <Upload className="h-3.5 w-3.5" aria-hidden="true" />
                   Foto Capa
                   <input
                     type="file"
                     accept="image/*"
                     className="hidden"
-                    onChange={(e) =>
-                      handleImageUpload(e, (url) => {
+                    onChange={(e) => {
+                      void handleImageUpload(e, (url) => {
                         setReviewingArticle({ ...reviewingArticle, imageUrl: url });
                         updatePautaContent(reviewingArticle.id, { imageUrl: url });
-                      })
-                    }
+                      });
+                    }}
                   />
                 </label>
               </div>

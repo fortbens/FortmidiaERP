@@ -164,6 +164,30 @@ function ensureUsersLoginNameColumn(PDO $pdo): array
     }
 }
 
+function ensureNewsPautasMediaColumns(PDO $pdo): void
+{
+    static $checked = false;
+    if ($checked) {
+        return;
+    }
+    $checked = true;
+    try {
+        $rows = $pdo->query("SHOW COLUMNS FROM `news_pautas` WHERE Field IN ('image_url', 'video_url')")->fetchAll();
+        $needsAlter = false;
+        foreach ($rows as $row) {
+            $type = strtolower((string) ($row['Type'] ?? ''));
+            if ($type !== '' && !str_contains($type, 'longtext') && !str_contains($type, 'mediumtext')) {
+                $needsAlter = true;
+            }
+        }
+        if ($needsAlter) {
+            $pdo->exec('ALTER TABLE `news_pautas` MODIFY COLUMN `image_url` LONGTEXT DEFAULT NULL, MODIFY COLUMN `video_url` LONGTEXT DEFAULT NULL');
+        }
+    } catch (Throwable) {
+        // Ignora caso o usuário do banco não possua privilégio ALTER TABLE
+    }
+}
+
 function ensureUserSessionsTable(PDO $pdo): void
 {
     if (getTableColumns($pdo, 'user_sessions') !== []) {
@@ -1471,6 +1495,7 @@ if ($resource === 'pautas') {
     requireAuth($pdo);
 
     if ($method === 'POST') {
+        ensureNewsPautasMediaColumns($pdo);
         $b = readJsonBody();
         $row = buildPautaDbRow($b, true);
         insertFilteredRow($pdo, 'news_pautas', $row, false);
@@ -1481,6 +1506,7 @@ if ($resource === 'pautas') {
     }
 
     if (($method === 'PUT' || $method === 'PATCH') && $itemId) {
+        ensureNewsPautasMediaColumns($pdo);
         $b = readJsonBody();
         $patch = buildPautaDbRow($b, false);
         updateFilteredRow($pdo, 'news_pautas', $itemId, $patch);

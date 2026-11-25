@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Bot,
   Check,
@@ -37,6 +37,7 @@ import {
   getYouTubeThumbnailUrl,
   isVideoArticle,
 } from '../../utils/videoEmbed';
+import { processUploadedPhoto } from '../../utils/imageUpload';
 
 interface PortalNewsEditorModuleProps {
   onOpenFortNewsPortal: () => void;
@@ -110,6 +111,17 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
   const [imageUrl, setImageUrl] = useState('/assets/aistudio/Microfone_dc305011.jpg');
   const [mediaType, setMediaType] = useState<'image' | 'video'>('image');
   const [videoUrl, setVideoUrl] = useState('');
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [photoMeta, setPhotoMeta] = useState<{
+    fileName: string;
+    width: number;
+    height: number;
+    sizeKb: number;
+  } | null>(null);
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingSources, setPendingSources] = useState<{ title: string; uri: string }[]>([]);
   const [pendingSocial, setPendingSocial] = useState<SocialCreativeDraft | undefined>(undefined);
   const [isAiOrigin, setIsAiOrigin] = useState(false);
@@ -171,6 +183,8 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     setImageUrl('/assets/aistudio/Microfone_dc305011.jpg');
     setMediaType('image');
     setVideoUrl('');
+    setPhotoMeta(null);
+    setPhotoError(null);
     setPendingSources([]);
     setPendingSocial(undefined);
     setIsAiOrigin(false);
@@ -187,6 +201,8 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     setImageUrl(art.imageUrl || getArticlePosterUrl(art) || '/assets/aistudio/Microfone_dc305011.jpg');
     setMediaType(isVideoArticle(art) ? 'video' : art.mediaType || 'image');
     setVideoUrl(art.videoUrl || '');
+    setPhotoMeta(null);
+    setPhotoError(null);
     setPendingSources(art.sourceUrls || []);
     setPendingSocial(art.socialCreative);
     setIsAiOrigin(Boolean(art.aiGenerated));
@@ -204,6 +220,8 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     setImageUrl('/assets/aistudio/Microfone_dc305011.jpg');
     setMediaType('image');
     setVideoUrl('');
+    setPhotoMeta(null);
+    setPhotoError(null);
     setPendingSources(draft.sources || []);
     setPendingSocial(draft.socialCreative);
     setIsAiOrigin(true);
@@ -279,7 +297,8 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     )}`;
 
     const trimmedVideo = videoUrl.trim();
-    const resolvedMediaType: 'image' | 'video' = trimmedVideo ? 'video' : mediaType;
+    const resolvedMediaType: 'image' | 'video' =
+      mediaType === 'video' ? 'video' : 'image';
     const ytThumb = getYouTubeThumbnailUrl(trimmedVideo);
     const isDefaultPreset = IMAGE_PRESETS.some((p) => p.url === imageUrl);
     const resolvedImageUrl =
@@ -356,20 +375,57 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
     resetEditor();
   };
 
-  const handleUploadPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setImageUrl(reader.result);
+  const applyPhotoFile = async (file: File) => {
+    setPhotoUploading(true);
+    setPhotoError(null);
+    try {
+      const processed = await processUploadedPhoto(file);
+      setImageUrl(processed.dataUrl);
+      setPhotoMeta({
+        fileName: processed.fileName,
+        width: processed.width,
+        height: processed.height,
+        sizeKb: processed.sizeKb,
+      });
+      if (editingPautaId) {
+        updatePautaContent(editingPautaId, { imageUrl: processed.dataUrl });
+        flash(
+          `Foto "${processed.fileName}" (${processed.sizeKb} KB) aplicada e salva na matéria em edição!`
+        );
+      } else {
+        flash(
+          `Foto "${processed.fileName}" (${processed.width}×${processed.height} · ${processed.sizeKb} KB) carregada na capa da matéria!`
+        );
       }
-    };
-    reader.readAsDataURL(file);
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Não foi possível carregar a foto selecionada.';
+      setPhotoError(msg);
+      flash(msg);
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
+
+  const handleUploadPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    await applyPhotoFile(file);
+  };
+
+  const handlePhotoDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingPhoto(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    await applyPhotoFile(file);
   };
 
   const handleUploadVideo = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
@@ -760,16 +816,21 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
                     placeholder="https://youtube.com/watch?v=..., Vimeo, Reels ou MP4"
                     className="flex-1 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white"
                   />
-                  <label className="inline-flex items-center gap-1.5 rounded-lg border border-[#FF6600]/40 bg-[#FF6600]/10 px-3 py-2 text-xs font-medium text-[#FF6600] cursor-pointer shrink-0">
+                  <input
+                    ref={videoInputRef}
+                    type="file"
+                    accept="video/mp4,video/webm,video/quicktime"
+                    className="hidden"
+                    onChange={handleUploadVideo}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => videoInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[#FF6600]/40 bg-[#FF6600]/10 px-3 py-2 text-xs font-medium text-[#FF6600] hover:bg-[#FF6600]/20 cursor-pointer shrink-0"
+                  >
                     <Upload className="h-3.5 w-3.5" />
                     Subir Vídeo
-                    <input
-                      type="file"
-                      accept="video/mp4,video/webm,video/quicktime"
-                      className="hidden"
-                      onChange={handleUploadVideo}
-                    />
-                  </label>
+                  </button>
                 </div>
               </div>
             )}
@@ -777,14 +838,117 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
             <label className="block text-[11px] text-zinc-400">
               {mediaType === 'video'
                 ? 'Imagem de Capa / Poster do Vídeo (padroniza o card com as demais notícias)'
-                : 'Foto de Capa da Matéria (Upload, URL ou Presets)'}
+                : 'Foto de Capa da Matéria (Upload, Arrastar & Soltar, URL ou Presets)'}
             </label>
+
+            {/* Hidden File Input controlled via explicit button/dropzone */}
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleUploadPhoto}
+            />
+
+            {/* Live Cover Photo Preview + Drag & Drop Upload Box */}
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDraggingPhoto(true);
+              }}
+              onDragLeave={() => setIsDraggingPhoto(false)}
+              onDrop={handlePhotoDrop}
+              className={`relative overflow-hidden rounded-lg border transition-colors ${
+                isDraggingPhoto
+                  ? 'border-[#FF6600] bg-[#FF6600]/10'
+                  : 'border-white/15 bg-[#121215]'
+              }`}
+            >
+              {imageUrl.trim() ? (
+                <div className="relative h-44 w-full bg-zinc-950">
+                  <MediaFrame
+                    src={imageUrl}
+                    alt={title || 'Pré-visualização da foto de capa'}
+                    className="h-full w-full object-cover"
+                  />
+                  <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-between gap-2 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 py-2">
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-300">
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                      {photoMeta
+                        ? `${photoMeta.fileName} (${photoMeta.width}×${photoMeta.height} · ${photoMeta.sizeKb} KB)`
+                        : imageUrl.startsWith('data:image/')
+                          ? `Foto enviada do dispositivo (${Math.max(1, Math.round(imageUrl.length / 1024))} KB)`
+                          : 'Capa pronta na matéria'}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => photoInputRef.current?.click()}
+                        disabled={photoUploading}
+                        className="inline-flex items-center gap-1 rounded-md bg-[#FF6600] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#e55a00] cursor-pointer disabled:opacity-60"
+                      >
+                        {photoUploading ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Upload className="h-3 w-3" />
+                        )}
+                        {photoUploading ? 'Enviando...' : 'Trocar Foto'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImageUrl('');
+                          setPhotoMeta(null);
+                          setPhotoError(null);
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md border border-white/20 bg-black/70 px-2 py-1 text-[11px] text-zinc-200 hover:bg-black cursor-pointer"
+                      >
+                        <X className="h-3 w-3" />
+                        Remover
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  disabled={photoUploading}
+                  className="flex h-36 w-full flex-col items-center justify-center gap-2 p-4 text-center text-zinc-400 hover:bg-white/[0.03] cursor-pointer"
+                >
+                  {photoUploading ? (
+                    <Loader2 className="h-6 w-6 animate-spin text-[#FF6600]" />
+                  ) : (
+                    <Upload className="h-6 w-6 text-[#FF6600]" />
+                  )}
+                  <span className="text-xs font-medium text-zinc-200">
+                    {photoUploading
+                      ? 'Otimizando e carregando foto...'
+                      : 'Clique para subir foto ou arraste a imagem aqui'}
+                  </span>
+                  <span className="text-[10px] text-zinc-500">
+                    JPG, PNG ou WebP · Otimização automática para publicação no Portal
+                  </span>
+                </button>
+              )}
+            </div>
+
+            {photoError && (
+              <div className="rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
+                {photoError}
+              </div>
+            )}
+
             <div className="flex flex-wrap gap-2">
               {IMAGE_PRESETS.map((preset) => (
                 <button
                   key={preset.url}
                   type="button"
-                  onClick={() => setImageUrl(preset.url)}
+                  onClick={() => {
+                    setImageUrl(preset.url);
+                    setPhotoMeta(null);
+                    setPhotoError(null);
+                  }}
                   className={`rounded-lg border px-2.5 py-1 text-[11px] cursor-pointer ${
                     imageUrl === preset.url
                       ? 'border-[#FF6600] bg-[#FF6600]/15 text-[#FF6600]'
@@ -795,18 +959,53 @@ export const PortalNewsEditorModule: React.FC<PortalNewsEditorModuleProps> = ({
                 </button>
               ))}
             </div>
+
             <div className="flex gap-2">
-              <input
-                type="text"
-                value={imageUrl}
-                onChange={(e) => setImageUrl(e.target.value)}
-                className="flex-1 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white"
-              />
-              <label className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-zinc-200 cursor-pointer shrink-0">
-                <Upload className="h-3.5 w-3.5 text-[#FF6600]" />
-                Foto
-                <input type="file" accept="image/*" className="hidden" onChange={handleUploadPhoto} />
-              </label>
+              {imageUrl.startsWith('data:image/') ? (
+                <div className="flex flex-1 items-center justify-between gap-2 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 min-w-0">
+                  <span className="truncate">
+                    Foto local carregada{' '}
+                    {photoMeta
+                      ? `· ${photoMeta.fileName} (${photoMeta.sizeKb} KB)`
+                      : `(${Math.max(1, Math.round(imageUrl.length / 1024))} KB)`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImageUrl('');
+                      setPhotoMeta(null);
+                    }}
+                    className="shrink-0 text-[11px] font-semibold text-zinc-200 underline hover:text-white cursor-pointer"
+                  >
+                    Colar URL
+                  </button>
+                </div>
+              ) : (
+                <input
+                  type="text"
+                  value={imageUrl}
+                  onChange={(e) => {
+                    setImageUrl(e.target.value);
+                    setPhotoMeta(null);
+                    setPhotoError(null);
+                  }}
+                  placeholder="Cole uma URL de imagem (https://...) ou clique em Foto"
+                  className="flex-1 rounded-lg border border-white/15 bg-[#121215] px-3 py-2 text-xs text-white"
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => photoInputRef.current?.click()}
+                disabled={photoUploading}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#FF6600]/40 bg-[#FF6600]/15 px-3 py-2 text-xs font-semibold text-[#FF6600] hover:bg-[#FF6600]/25 cursor-pointer shrink-0 disabled:opacity-60"
+              >
+                {photoUploading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Upload className="h-3.5 w-3.5" />
+                )}
+                {photoUploading ? 'Subindo...' : 'Subir Foto'}
+              </button>
             </div>
           </div>
 
