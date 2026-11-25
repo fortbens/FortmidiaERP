@@ -3,6 +3,7 @@ import {
   Check,
   Copy,
   Download,
+  ExternalLink,
   FilePlus2,
   FileText,
   Mail,
@@ -24,6 +25,7 @@ import {
 } from '../FortMidiaLogo';
 
 const LETTER_TYPE_LABELS: Record<OfficialLetterType, string> = {
+  convite_empresarial: 'Convite Empresarial',
   convite_podcast: 'Carta Convite Podcast',
   apresentacao_fortmidia: 'Apresentação FortMídia',
   convite_patrocinio: 'Convite de Patrocínio',
@@ -31,6 +33,7 @@ const LETTER_TYPE_LABELS: Record<OfficialLetterType, string> = {
 };
 
 const LETTER_TYPE_PREFIX: Record<OfficialLetterType, string> = {
+  convite_empresarial: 'CONV-EMP',
   convite_podcast: 'CTR-POD',
   apresentacao_fortmidia: 'APRES-FM',
   convite_patrocinio: 'PAT-360',
@@ -211,6 +214,37 @@ export const LettersModule: React.FC = () => {
         headerLogoUrl: OFFICIAL_FORTMIDIA_LOGO_URL,
         accentColor: '#fa6607',
       },
+      convite_empresarial: {
+        code,
+        type: 'convite_empresarial',
+        title: `Convite Empresarial — Grupo FortMídia (${code})`,
+        dateCityLine: `Franco da Rocha, SP · ${todayFormatted}`,
+        recipientName: 'Ao empresariado e às lideranças comerciais',
+        recipientRole: 'Empresário(a) / Diretoria Comercial',
+        recipientCompany: 'Empresas da Região do CIMBAJU',
+        recipientContact: '(11) 95779-2424 · comercial@fortnews.com.br',
+        subjectRef: 'REF: CONVITE PARA PARTICIPAÇÃO NO ECOSSISTEMA GRUPO FORTMÍDIA',
+        greeting:
+          'Ao empresariado e às lideranças comerciais da região do CIMBAJU (Franco da Rocha, Caieiras, Francisco Morato, Cajamar e Mairiporã),',
+        bodyText:
+          'Temos a satisfação de convidar a sua empresa para conhecer e integrar o ecossistema de comunicação, mídia e tecnologia do Grupo FortMídia — uma estrutura sediada em Franco da Rocha e dedicada a ampliar a visibilidade, o posicionamento e a geração de negócios para marcas que atuam na nossa região.\n\nO Grupo FortMídia reúne, em uma operação integrada, o jornalismo e a audiência regional do FortNews, FortNews Podcast e FortNews TV, a presença física em mídias urbanas e exteriores, os serviços da Agência FortMídia e as soluções de desenvolvimento e automação da FortTech.\n\n1. COMO A SUA EMPRESA PODE PARTICIPAR:\n• Patrocínios e Cotas no Ecossistema (Portal FortNews, FortNews Podcast e FortNews TV).\n• Agência FortMídia (gestão de social media, campanhas online, tráfego segmentado e posicionamento digital).\n• Mídia Exterior e Pontos de Fluxo (outdoors e circuitos estratégicos no CIMBAJU).\n• Tecnologia e Estúdio Corporativo (sites, aplicativos, sistemas FortTech e locação do estúdio para gravações institucionais).\n• Projetos e Eventos Regionais (ativações, patrocínios e iniciativas comunitárias e setoriais).\n\nConvidamos você e sua equipe para uma conversa institucional ou visita à nossa sede em Franco da Rocha (Rua Dr. Hamilton Prado, 289 — Centro).',
+        highlights: [
+          'Alcance Digital Comprovado: Mais de 1,8 milhão de visualizações mensais nas redes conectando sua marca ao público regional.',
+          'Presença em Rotas de Outdoors: Mais de 70.000 visualizações nas rotas de outdoors nos principais fluxos da região.',
+          'Segmentação Regional Direcionada: Ações pensadas para Franco da Rocha, Caieiras, Francisco Morato, Cajamar e Mairiporã.',
+          'Soluções Sob Medida: Planejamento alinhado ao porte, ao momento e às metas comerciais de cada negócio.',
+          'Atendimento Próximo e Estrutura Local: Operação sediada na Rua Dr. Hamilton Prado, 289 — Centro, Franco da Rocha.',
+        ],
+        closingLine:
+          'Para agendar uma reunião ou solicitar uma proposta comercial, entre em contato pelos canais oficiais: fortmidia.com.br · jornalfortnews.com.br · comercial@fortnews.com.br ou redacao@fortnews.com.br · WhatsApp (11) 95779-2424.',
+        senderName: 'Emerson Carneiro',
+        senderRole: 'Diretor Executivo · Grupo FortMídia',
+        senderEmail: 'comercial@fortnews.com.br',
+        senderPhone: '(11) 95779-2424',
+        referencePdfUrl: '/assets/aistudio/Convite_Empresarial_-_Grupo_FortM_dia_287f1a39.pdf',
+        headerLogoUrl: OFFICIAL_FORTMIDIA_LOGO_URL,
+        accentColor: '#fa6607',
+      },
     };
 
     const created = addOfficialLetter(presetsByType[type]);
@@ -345,6 +379,7 @@ export const LettersModule: React.FC = () => {
           </button>
           {(
             [
+              ['convite_empresarial', 'Convite Empresarial'],
               ['convite_podcast', 'Convite Podcast'],
               ['apresentacao_fortmidia', 'Apresentação FortMídia'],
               ['convite_patrocinio', 'Convite Patrocínio'],
@@ -384,7 +419,7 @@ export const LettersModule: React.FC = () => {
                 Modelos &amp; Documentos Salvos ({filteredLetters.length})
               </span>
               <div className="flex flex-wrap items-center gap-1">
-                {(['Todos', 'convite_podcast', 'apresentacao_fortmidia', 'convite_patrocinio', 'assessoria_mandato'] as const).map(
+                {(['Todos', 'convite_empresarial', 'convite_podcast', 'apresentacao_fortmidia', 'convite_patrocinio', 'assessoria_mandato'] as const).map(
                   (t) => (
                     <button
                       key={t}
@@ -425,6 +460,11 @@ export const LettersModule: React.FC = () => {
                         <span className="text-[11px] font-medium text-[#fa6607] truncate">
                           {LETTER_TYPE_LABELS[ltr.type]}
                         </span>
+                        {ltr.referencePdfUrl && (
+                          <span className="rounded border border-emerald-500/35 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-300 shrink-0">
+                            PDF Anexo
+                          </span>
+                        )}
                       </div>
                       <div className="mt-0.5 text-xs font-semibold text-white truncate">
                         {ltr.title}
@@ -807,6 +847,17 @@ export const LettersModule: React.FC = () => {
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  {selectedLetter.referencePdfUrl && (
+                    <a
+                      href={selectedLetter.referencePdfUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/20 cursor-pointer whitespace-nowrap"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                      PDF Original (Anexo)
+                    </a>
+                  )}
                   <button
                     type="button"
                     onClick={handleCopyWhatsAppText}

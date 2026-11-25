@@ -2450,6 +2450,40 @@ export const INITIAL_OFFICIAL_LETTERS: OfficialLetterDocument[] = [
     createdAt: '18/11/2026 · 10:15',
     updatedAt: '18/11/2026 · 10:15',
   },
+  {
+    id: 'ltr-05',
+    code: 'CONV-EMP-2026-001',
+    type: 'convite_empresarial',
+    title: 'Convite Empresarial — Participação no Ecossistema Grupo FortMídia',
+    dateCityLine: 'Franco da Rocha, SP · Novembro de 2026',
+    recipientName: 'Ao empresariado e às lideranças comerciais',
+    recipientRole: 'Empresário(a) / Diretoria Comercial',
+    recipientCompany: 'Empresas da Região do CIMBAJU',
+    recipientContact: '(11) 95779-2424 · comercial@fortnews.com.br',
+    subjectRef: 'REF: CONVITE PARA PARTICIPAÇÃO NO ECOSSISTEMA GRUPO FORTMÍDIA',
+    greeting:
+      'Ao empresariado e às lideranças comerciais da região do CIMBAJU (Franco da Rocha, Caieiras, Francisco Morato, Cajamar e Mairiporã),',
+    bodyText:
+      'Temos a satisfação de convidar a sua empresa para conhecer e integrar o ecossistema de comunicação, mídia e tecnologia do Grupo FortMídia — uma estrutura sediada em Franco da Rocha e dedicada a ampliar a visibilidade, o posicionamento e a geração de negócios para marcas que atuam na nossa região.\n\nO Grupo FortMídia reúne, em uma operação integrada, o jornalismo e a audiência regional do FortNews, FortNews Podcast e FortNews TV, a presença física em mídias urbanas e exteriores, os serviços da Agência FortMídia e as soluções de desenvolvimento e automação da FortTech.\n\n1. COMO A SUA EMPRESA PODE PARTICIPAR:\n• Patrocínios e Cotas no Ecossistema: presença no Portal FortNews, FortNews Podcast e FortNews TV, com inserções, entrevistas e formatos editoriais planejados para gerar autoridade.\n• Agência FortMídia: gestão de redes sociais, campanhas online, tráfego segmentado e fortalecimento do posicionamento digital da marca.\n• Mídia Exterior e Pontos de Fluxo: presença visual em outdoors e circuitos estratégicos nas rotas de maior circulação do CIMBAJU.\n• Tecnologia e Estúdio Corporativo: desenvolvimento de sites, aplicativos e sistemas sob medida pela FortTech, além da locação do nosso estúdio para gravações institucionais, entrevistas e podcasts.\n• Projetos e Eventos Regionais: ativações de marca, patrocínios e iniciativas comunitárias e setoriais de alto impacto.\n\n2. ECOSSISTEMA UNIFICADO NA BACIA DO JUQUERI:\nNossa operação combina mais de 1,8 milhão de visualizações mensais nas redes sociais com mais de 70.000 visualizações nas rotas de outdoors em toda a bacia do Juqueri, conectando sua empresa ao público certo nos canais físicos e digitais.\n\n3. AGENDAMENTO DE REUNIÃO E VISITA À SEDE:\nConvidamos você e sua equipe para uma conversa institucional ou visita presencial à nossa sede em Franco da Rocha (Rua Dr. Hamilton Prado, 289 — Centro), onde poderemos apresentar nossos formatos e desenhar uma estratégia sob medida para os objetivos do seu negócio.',
+    highlights: [
+      'Alcance Digital Comprovado: Mais de 1,8 milhão de visualizações mensais nas redes conectando sua marca ao público regional.',
+      'Presença em Rotas de Outdoors: Mais de 70.000 visualizações nas rotas de outdoors nos principais fluxos da região.',
+      'Segmentação Regional Direcionada: Ações pensadas para Franco da Rocha, Caieiras, Francisco Morato, Cajamar e Mairiporã.',
+      'Soluções Sob Medida: Planejamento alinhado ao porte, ao momento e às metas comerciais de cada negócio.',
+      'Atendimento Próximo e Estrutura Local: Operação sediada na Rua Dr. Hamilton Prado, 289 — Centro, Franco da Rocha.',
+    ],
+    closingLine:
+      'Para agendar uma reunião ou solicitar uma proposta comercial, entre em contato pelos canais oficiais: fortmidia.com.br · jornalfortnews.com.br · comercial@fortnews.com.br ou redacao@fortnews.com.br · WhatsApp (11) 95779-2424.',
+    senderName: 'Emerson Carneiro',
+    senderRole: 'Diretor Executivo · Grupo FortMídia',
+    senderEmail: 'comercial@fortnews.com.br',
+    senderPhone: '(11) 95779-2424',
+    referencePdfUrl: '/assets/aistudio/Convite_Empresarial_-_Grupo_FortM_dia_287f1a39.pdf',
+    headerLogoUrl: '/assets/aistudio/Logo_FortM_dia_ded2b7d7.png',
+    accentColor: '#fa6607',
+    createdAt: '25/11/2026 · 08:00',
+    updatedAt: '25/11/2026 · 08:00',
+  },
 ];
 
 export const INITIAL_PRESET_AUDIT_LOGS: PresetAuditLogEntry[] = [

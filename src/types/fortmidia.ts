@@ -709,7 +709,8 @@ export type OfficialLetterType =
   | 'convite_podcast'
   | 'apresentacao_fortmidia'
   | 'convite_patrocinio'
-  | 'assessoria_mandato';
+  | 'assessoria_mandato'
+  | 'convite_empresarial';
 
 export interface OfficialLetterDocument {
   id: string;
@@ -734,6 +735,7 @@ export interface OfficialLetterDocument {
   podcastEpisodeDate?: string;
   podcastEpisodeTime?: string;
   podcastStudioAddress?: string;
+  referencePdfUrl?: string;
   headerLogoUrl: string;
   accentColor: string;
   createdAt: string;

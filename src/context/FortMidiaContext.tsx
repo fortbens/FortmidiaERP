@@ -513,6 +513,16 @@ function hydrateBudgetCatalog(rawCatalog?: BudgetCatalogItem[]): BudgetCatalogIt
   return missingFortTech.length > 0 ? [...rawCatalog, ...missingFortTech] : rawCatalog;
 }
 
+function hydrateOfficialLetters(rawLetters?: OfficialLetterDocument[]): OfficialLetterDocument[] {
+  if (!rawLetters || rawLetters.length === 0) return INITIAL_OFFICIAL_LETTERS;
+  const hasConviteEmpresarial = rawLetters.some(
+    (l) => l.id === 'ltr-05' || l.type === 'convite_empresarial'
+  );
+  if (hasConviteEmpresarial) return rawLetters;
+  const conviteTemplate = INITIAL_OFFICIAL_LETTERS.find((l) => l.id === 'ltr-05');
+  return conviteTemplate ? [conviteTemplate, ...rawLetters] : rawLetters;
+}
+
 const FortMidiaContext = createContext<FortMidiaContextValue | null>(null);
 
 export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -602,10 +612,7 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             parsed.podcastShows && parsed.podcastShows.length > 0
               ? parsed.podcastShows
               : OFFICIAL_PODCASTS,
-          officialLetters:
-            parsed.officialLetters && parsed.officialLetters.length > 0
-              ? parsed.officialLetters
-              : INITIAL_OFFICIAL_LETTERS,
+          officialLetters: hydrateOfficialLetters(parsed.officialLetters),
           presetAuditLogs:
             parsed.presetAuditLogs && parsed.presetAuditLogs.length > 0
               ? parsed.presetAuditLogs
@@ -1040,6 +1047,7 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               faviconUrl: finalNewsFav,
             },
             marketingPresets: migrateMarketingPresets(snapshot?.marketingPresets ?? prev.marketingPresets),
+            officialLetters: hydrateOfficialLetters(snapshot?.officialLetters ?? prev.officialLetters),
             budgetCatalog: snapshot?.budgetCatalog
               ? hydrateBudgetCatalog(snapshot.budgetCatalog)
               : prev.budgetCatalog,

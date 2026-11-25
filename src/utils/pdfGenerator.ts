@@ -727,6 +727,7 @@ export async function downloadOfficialLetterPdf(
     apresentacao_fortmidia: 'CARTA DE APRESENTAÇÃO INSTITUCIONAL',
     convite_patrocinio: 'CARTA CONVITE DE PATROCÍNIO',
     assessoria_mandato: 'PROPOSTA EXECUTIVA DE ASSESSORIA',
+    convite_empresarial: 'CONVITE EMPRESARIAL · ECOSSISTEMA FORTMÍDIA',
   };
   doc.text(typeLabelMap[letter.type], pageW - 16, 15, { align: 'right' });
 
@@ -809,8 +810,9 @@ export async function downloadOfficialLetterPdf(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
   doc.setTextColor(24, 24, 28);
-  doc.text(letter.greeting || 'Prezado(a),', 16, y);
-  y += 7;
+  const greetingLines = doc.splitTextToSize(letter.greeting || 'Prezado(a),', pageW - 32);
+  doc.text(greetingLines, 16, y);
+  y += greetingLines.length * 4.8 + 3;
 
   // Body paragraphs
   doc.setFont('helvetica', 'normal');
@@ -830,13 +832,19 @@ export async function downloadOfficialLetterPdf(
   // Highlights bullets
   const validBullets = (letter.highlights || []).filter((h) => h.trim().length > 0);
   if (validBullets.length > 0) {
-    if (y + validBullets.length * 6 + 14 > pageH - 42) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.6);
+    const wrappedBullets = validBullets.map((item) =>
+      doc.splitTextToSize(item.trim(), pageW - 46) as string[]
+    );
+    const totalBulletLines = wrappedBullets.reduce((acc, lines) => acc + lines.length, 0);
+    const boxH = 11 + totalBulletLines * 4.5 + validBullets.length * 1.6;
+    if (y + boxH + 6 > pageH - 36) {
       doc.addPage();
       y = 20;
     }
     doc.setFillColor(248, 248, 250);
     doc.setDrawColor(225, 225, 232);
-    const boxH = 10 + validBullets.length * 6.2;
     doc.roundedRect(16, y, pageW - 32, boxH, 1.5, 1.5, 'FD');
 
     doc.setFont('helvetica', 'bold');
@@ -848,12 +856,11 @@ export async function downloadOfficialLetterPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.6);
     doc.setTextColor(35, 35, 42);
-    for (const item of validBullets) {
+    for (const bulletLines of wrappedBullets) {
       doc.setFillColor(r, g, b);
       doc.circle(21.5, by - 1.1, 0.9, 'F');
-      const bulletLines = doc.splitTextToSize(item.trim(), pageW - 46);
-      doc.text(bulletLines[0], 25, by);
-      by += 6;
+      doc.text(bulletLines, 25, by);
+      by += bulletLines.length * 4.5 + 1.6;
     }
     y += boxH + 7;
   }
