@@ -52,6 +52,7 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
     updateSiteSettings,
     newsPortalSettings,
     updateNewsPortalSettings,
+    saveCmsChangesNow,
     quotas,
     addQuota,
     updateQuota,
@@ -80,6 +81,7 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
 
   const [subTab, setSubTab] = useState<CmsSubTab>('identidade');
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [savingCms, setSavingCms] = useState(false);
   const [selectedCmsPresetId, setSelectedCmsPresetId] = useState<string>(
     siteCmsPresets[0]?.id || ''
   );
@@ -137,7 +139,23 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
 
   const flashNotice = (msg: string) => {
     setSavedNotice(msg);
-    window.setTimeout(() => setSavedNotice(null), 3500);
+    window.setTimeout(() => setSavedNotice(null), 4000);
+  };
+
+  const handleSaveCmsNow = async (sectionLabel?: string) => {
+    setSavingCms(true);
+    try {
+      const res = await saveCmsChangesNow();
+      flashNotice(
+        res.ok
+          ? sectionLabel
+            ? `${sectionLabel}: alterações salvas permanentemente!`
+            : res.message
+          : res.message
+      );
+    } finally {
+      setSavingCms(false);
+    }
   };
 
   const applyCmsPreset = (preset: SiteCmsPreset) => {
@@ -278,14 +296,29 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onPreviewPortal}
-          className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-[#141417] px-4 py-2 text-xs font-semibold text-white hover:bg-white/5 cursor-pointer whitespace-nowrap shrink-0 self-start sm:self-auto"
-        >
-          <Eye className="h-4 w-4 text-[#FF6600]" aria-hidden="true" />
-          Visualizar Alterações no Site
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto shrink-0">
+          <button
+            type="button"
+            disabled={savingCms}
+            onClick={() => handleSaveCmsNow()}
+            className="inline-flex items-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer whitespace-nowrap"
+          >
+            {savingCms ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <Save className="h-4 w-4" aria-hidden="true" />
+            )}
+            {savingCms ? 'Salvando...' : 'Salvar Alterações'}
+          </button>
+          <button
+            type="button"
+            onClick={onPreviewPortal}
+            className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-[#141417] px-4 py-2 text-xs font-semibold text-white hover:bg-white/5 cursor-pointer whitespace-nowrap"
+          >
+            <Eye className="h-4 w-4 text-[#FF6600]" aria-hidden="true" />
+            Visualizar Alterações no Site
+          </button>
+        </div>
       </div>
 
       {/* Sub-navigation Tabs */}
@@ -928,6 +961,25 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
               )}
             </div>
           </div>
+
+          <div className="lg:col-span-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#fa6607]/30 bg-[#111114] px-5 py-3.5">
+            <span className="text-xs text-zinc-300">
+              Finalize clicando em salvar para garantir a permanência imediata de toda a identidade do Site FortMídia.
+            </span>
+            <button
+              type="button"
+              disabled={savingCms}
+              onClick={() => handleSaveCmsNow('Site FortMídia')}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
+            >
+              {savingCms ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              Salvar Site FortMídia
+            </button>
+          </div>
         </div>
       )}
 
@@ -1143,6 +1195,25 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
             ))}
           </div>
         </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#fa6607]/30 bg-[#111114] px-5 py-3.5">
+            <span className="text-xs text-zinc-300">
+              Salve as alterações feitas nos serviços, preços e visibilidade pública das cotas.
+            </span>
+            <button
+              type="button"
+              disabled={savingCms}
+              onClick={() => handleSaveCmsNow('Serviços & Cotas')}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
+            >
+              {savingCms ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              Salvar Serviços &amp; Cotas
+            </button>
+          </div>
         </div>
       )}
 
@@ -1280,6 +1351,25 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
                 </div>
               </div>
             ))}
+          </div>
+
+          <div className="lg:col-span-12 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#fa6607]/30 bg-[#111114] px-5 py-3.5">
+            <span className="text-xs text-zinc-300">
+              Salve a Galeria para persistir todas as fotos e cases cadastrados no portal.
+            </span>
+            <button
+              type="button"
+              disabled={savingCms}
+              onClick={() => handleSaveCmsNow('Galeria de Fotos')}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
+            >
+              {savingCms ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              Salvar Galeria
+            </button>
           </div>
         </div>
       )}
@@ -1438,13 +1528,26 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
             <div className="pt-2 flex flex-wrap gap-3">
               <button
                 type="button"
+                disabled={savingCms}
+                onClick={() => handleSaveCmsNow('Pop-up Promocional')}
+                className="inline-flex items-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
+              >
+                {savingCms ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Save className="h-4 w-4" aria-hidden="true" />
+                )}
+                Salvar Pop-up
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   setPopupPreviewOpen(true);
                   onPreviewPortal();
                 }}
-                className="inline-flex items-center gap-2 rounded-lg bg-[#FF6600] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#FF5500] cursor-pointer"
+                className="inline-flex items-center gap-2 rounded-lg border border-[#FF6600]/50 bg-[#FF6600]/15 px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#FF6600]/25 cursor-pointer"
               >
-                <Eye className="h-4 w-4" />
+                <Eye className="h-4 w-4 text-[#FF6600]" />
                 Testar Pop-up no Site Agora
               </button>
             </div>
@@ -1944,6 +2047,25 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
               />
             </div>
           </div>
+
+          <div className="lg:col-span-12 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#fa6607]/30 bg-[#111114] px-5 py-3.5">
+            <span className="text-xs text-zinc-300">
+              Salve todas as personalizações visuais, logotipo, selos, ticker e widgets do Portal Jornal FortNews.
+            </span>
+            <button
+              type="button"
+              disabled={savingCms}
+              onClick={() => handleSaveCmsNow('Portal Jornal FortNews')}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
+            >
+              {savingCms ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              Salvar Portal FortNews
+            </button>
+          </div>
         </div>
       )}
 
@@ -2163,6 +2285,25 @@ export const CmsModule: React.FC<CmsModuleProps> = ({
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#fa6607]/30 bg-[#111114] px-5 py-3.5">
+            <span className="text-xs text-zinc-300">
+              Salve as configurações de domínio e roteamento de ambos os portais.
+            </span>
+            <button
+              type="button"
+              disabled={savingCms}
+              onClick={() => handleSaveCmsNow('Domínios & Deploy')}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
+            >
+              {savingCms ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              Salvar Configurações
+            </button>
           </div>
         </div>
       )}

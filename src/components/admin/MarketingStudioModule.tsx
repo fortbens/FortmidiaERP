@@ -69,8 +69,10 @@ type WatermarkPos =
 type MaskMode = 'dark' | 'light' | 'custom';
 type ArtFrameTemplate = 'classic' | 'fortnews_editorial';
 
-const OFFICIAL_FORTNEWS_VECTOR_LOGO =
+const LEGACY_FORTNEWS_VECTOR_LOGO =
   '/assets/aistudio/Logotipo_FortNews_vetorizado__9__b9ef51c4.png';
+const OFFICIAL_FORTNEWS_VECTOR_LOGO =
+  '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__26069d61.png';
 
 const ALL_FORMAT_SPECS: Record<FormatId, { label: string; w: number; h: number }> = {
   feed_4_5: { label: 'Instagram Feed (1080×1350)', w: 1080, h: 1350 },
@@ -694,7 +696,13 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
     if (typeof preset.showEditorialLogo === 'boolean') {
       setShowEditorialLogo(preset.showEditorialLogo);
     }
-    if (preset.editorialLogoUrl) setEditorialLogoUrl(preset.editorialLogoUrl);
+    if (preset.editorialLogoUrl) {
+      setEditorialLogoUrl(
+        preset.editorialLogoUrl === LEGACY_FORTNEWS_VECTOR_LOGO
+          ? OFFICIAL_FORTNEWS_VECTOR_LOGO
+          : preset.editorialLogoUrl
+      );
+    }
     if (preset.editorialLogoScale) setEditorialLogoScale(preset.editorialLogoScale);
     if (preset.editorialLogoAlign) setEditorialLogoAlign(preset.editorialLogoAlign);
     if (preset.editorialFooterSlogan) setEditorialFooterSlogan(preset.editorialFooterSlogan);
@@ -2446,7 +2454,7 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
                                         : 'border-white/10 bg-[#121215] text-zinc-400 hover:text-white'
                                     }`}
                                   >
-                                    Logo FortNews Ondas (Oficial)
+                                    Logo FortNews (Padrão Oficial)
                                   </button>
                                   {OFFICIAL_BRAND_LOGOS.slice(0, 3).map((l) => (
                                     <button

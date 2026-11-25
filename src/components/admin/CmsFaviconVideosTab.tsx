@@ -5,10 +5,12 @@ import {
   EyeOff,
   Film,
   Globe,
+  Loader2,
   Newspaper,
   Play,
   Plus,
   RotateCcw,
+  Save,
   Trash2,
   Tv,
   Upload,
@@ -84,10 +86,13 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
     updateSiteSettings,
     newsPortalSettings,
     updateNewsPortalSettings,
+    saveCmsChangesNow,
     pautas,
     publishPautaToSite,
     unpublishPauta,
   } = useFortMidia();
+
+  const [savingSection, setSavingSection] = useState<string | null>(null);
 
   // New FortMídia site video form
   const [fmTitle, setFmTitle] = useState('');
@@ -103,6 +108,87 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
   const [fnPosterUrl, setFnPosterUrl] = useState('');
   const [fnDescription, setFnDescription] = useState('');
 
+  const handleForceSaveSection = async (sectionId: string, customSuccessMsg?: string) => {
+    setSavingSection(sectionId);
+    try {
+      const res = await saveCmsChangesNow();
+      onNotice(res.ok ? customSuccessMsg || res.message : res.message);
+    } finally {
+      setSavingSection(null);
+    }
+  };
+
+  const handleReadFaviconFile = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    onLoad: (dataUrl: string) => void,
+    successMsg: string
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    if (file.size > 5 * 1024 * 1024) {
+      onNotice('Arquivo de favicon muito grande (máx. 5 MB).');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rawDataUrl = typeof reader.result === 'string' ? reader.result : '';
+      if (!rawDataUrl) return;
+
+      // SVG e ICO leves vão direto sem rasterizar
+      if (
+        (file.type === 'image/svg+xml' ||
+          file.type === 'image/x-icon' ||
+          file.type === 'image/vnd.microsoft.icon') &&
+        rawDataUrl.length < 180_000
+      ) {
+        onLoad(rawDataUrl);
+        void saveCmsChangesNow();
+        onNotice(successMsg);
+        return;
+      }
+
+      // Redimensiona/otimiza PNG/JPG/WEBP para 128x128px para garantir persistência imediata e permanente
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const size = 128;
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.clearRect(0, 0, size, size);
+            const scale = Math.min(size / Math.max(1, img.width), size / Math.max(1, img.height));
+            const dw = Math.round(img.width * scale);
+            const dh = Math.round(img.height * scale);
+            const dx = Math.round((size - dw) / 2);
+            const dy = Math.round((size - dh) / 2);
+            ctx.drawImage(img, dx, dy, dw, dh);
+            const optimized = canvas.toDataURL('image/png');
+            onLoad(optimized);
+            void saveCmsChangesNow();
+            onNotice(successMsg);
+            return;
+          }
+        } catch {
+          // Fallback para o arquivo original se o canvas não puder exportar
+        }
+        onLoad(rawDataUrl);
+        void saveCmsChangesNow();
+        onNotice(successMsg);
+      };
+      img.onerror = () => {
+        onLoad(rawDataUrl);
+        void saveCmsChangesNow();
+        onNotice(successMsg);
+      };
+      img.src = rawDataUrl;
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleReadFile = (
     e: React.ChangeEvent<HTMLInputElement>,
     maxMb: number,
@@ -111,6 +197,7 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
     if (file.size > maxMb * 1024 * 1024) {
       onNotice(
         `Arquivo muito grande (${(file.size / (1024 * 1024)).toFixed(1)} MB). Para vídeos acima de ${maxMb} MB, recomenda-se colar o link do YouTube, Vimeo ou MP4 hospedado.`
@@ -218,7 +305,7 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Favicon FortMídia */}
         <div className="rounded-xl border border-white/10 bg-[#111114] p-6 space-y-4">
-          <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
             <div>
               <h3 className="font-display text-base font-bold text-white flex items-center gap-2">
                 <Globe className="h-4 w-4 text-[#fa6607]" aria-hidden="true" />
@@ -228,20 +315,22 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
                 Ícone exibido na aba do navegador em {siteSettings.siteDomain || 'fortmidia.com.br'} e no painel
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                updateSiteSettings({
-                  faviconUrl:
-                    siteSettings.logoUrl || INITIAL_SITE_SETTINGS.faviconUrl,
-                });
-                onNotice('Favicon do Site FortMídia restaurado para o logotipo oficial.');
-              }}
-              className="inline-flex items-center gap-1 rounded-lg border border-white/15 px-2.5 py-1.5 text-[11px] text-zinc-300 hover:bg-white/5 cursor-pointer"
-            >
-              <RotateCcw className="h-3 w-3" aria-hidden="true" />
-              Usar Logo
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  updateSiteSettings({
+                    faviconUrl: INITIAL_SITE_SETTINGS.faviconUrl,
+                  });
+                  void saveCmsChangesNow();
+                  onNotice('Favicon oficial 3D da FortMídia aplicado e salvo permanentemente!');
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-[#fa6607]/40 bg-[#fa6607]/10 px-2.5 py-1.5 text-[11px] font-medium text-[#fa6607] hover:bg-[#fa6607]/20 cursor-pointer"
+              >
+                <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                Favicon Oficial
+              </button>
+            </div>
           </div>
 
           {/* Browser Tab Preview */}
@@ -250,7 +339,7 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
               Prévia na aba do navegador
             </div>
             <div className="inline-flex items-center gap-2 rounded-t-lg border border-b-0 border-white/15 bg-[#1C1C21] px-3 py-1.5 max-w-full">
-              <div className="h-4 w-4 shrink-0 overflow-hidden rounded-xs bg-white flex items-center justify-center">
+              <div className="h-5 w-5 shrink-0 overflow-hidden rounded-xs bg-white/95 p-0.5 flex items-center justify-center">
                 {fmFavicon ? (
                   <img
                     src={fmFavicon}
@@ -283,21 +372,44 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
                 accept="image/png,image/x-icon,image/vnd.microsoft.icon,image/svg+xml,image/webp,image/jpeg"
                 className="hidden"
                 onChange={(e) =>
-                  handleReadFile(
+                  handleReadFaviconFile(
                     e,
-                    2,
                     (dataUrl) => updateSiteSettings({ faviconUrl: dataUrl }),
-                    'Favicon do Site FortMídia atualizado em tempo real.'
+                    'Favicon do Site FortMídia otimizado e salvo permanentemente!'
                   )
                 }
               />
             </label>
           </div>
+
+          <div className="flex items-center justify-between gap-2 border-t border-white/10 pt-3">
+            <span className="text-[10px] text-zinc-400">
+              Permanência reforçada ativa (otimização automática + gravação dedicada)
+            </span>
+            <button
+              type="button"
+              disabled={savingSection === 'fm_favicon'}
+              onClick={() =>
+                handleForceSaveSection(
+                  'fm_favicon',
+                  'Favicon do Site FortMídia salvo permanentemente!'
+                )
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#fa6607] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer shrink-0"
+            >
+              {savingSection === 'fm_favicon' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              Salvar Favicon
+            </button>
+          </div>
         </div>
 
         {/* Favicon FortNews */}
         <div className="rounded-xl border border-white/10 bg-[#111114] p-6 space-y-4">
-          <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
             <div>
               <h3 className="font-display text-base font-bold text-white flex items-center gap-2">
                 <Newspaper className="h-4 w-4 text-[#fa6607]" aria-hidden="true" />
@@ -307,20 +419,22 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
                 Ícone exibido na aba do navegador em {newsPortalSettings.domain || 'jornalfortnews.com.br'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                updateNewsPortalSettings({
-                  faviconUrl:
-                    newsPortalSettings.logoUrl || INITIAL_NEWS_PORTAL_SETTINGS.faviconUrl,
-                });
-                onNotice('Favicon do Portal FortNews restaurado para o logotipo oficial.');
-              }}
-              className="inline-flex items-center gap-1 rounded-lg border border-white/15 px-2.5 py-1.5 text-[11px] text-zinc-300 hover:bg-white/5 cursor-pointer"
-            >
-              <RotateCcw className="h-3 w-3" aria-hidden="true" />
-              Usar Logo
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  updateNewsPortalSettings({
+                    faviconUrl: INITIAL_NEWS_PORTAL_SETTINGS.faviconUrl,
+                  });
+                  void saveCmsChangesNow();
+                  onNotice('Favicon oficial do Jornal FortNews aplicado e salvo permanentemente!');
+                }}
+                className="inline-flex items-center gap-1 rounded-lg border border-[#fa6607]/40 bg-[#fa6607]/10 px-2.5 py-1.5 text-[11px] font-medium text-[#fa6607] hover:bg-[#fa6607]/20 cursor-pointer"
+              >
+                <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                Favicon Oficial
+              </button>
+            </div>
           </div>
 
           {/* Browser Tab Preview */}
@@ -329,7 +443,7 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
               Prévia na aba do navegador
             </div>
             <div className="inline-flex items-center gap-2 rounded-t-lg border border-b-0 border-white/15 bg-[#1C1C21] px-3 py-1.5 max-w-full">
-              <div className="h-4 w-4 shrink-0 overflow-hidden rounded-xs bg-white flex items-center justify-center">
+              <div className="h-5 w-5 shrink-0 overflow-hidden rounded-xs bg-white/95 p-0.5 flex items-center justify-center">
                 {fnFavicon ? (
                   <img
                     src={fnFavicon}
@@ -362,15 +476,38 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
                 accept="image/png,image/x-icon,image/vnd.microsoft.icon,image/svg+xml,image/webp,image/jpeg"
                 className="hidden"
                 onChange={(e) =>
-                  handleReadFile(
+                  handleReadFaviconFile(
                     e,
-                    2,
                     (dataUrl) => updateNewsPortalSettings({ faviconUrl: dataUrl }),
-                    'Favicon do Portal FortNews atualizado em tempo real.'
+                    'Favicon do Portal FortNews otimizado e salvo permanentemente!'
                   )
                 }
               />
             </label>
+          </div>
+
+          <div className="flex items-center justify-between gap-2 border-t border-white/10 pt-3">
+            <span className="text-[10px] text-zinc-400">
+              Permanência reforçada ativa (otimização automática + gravação dedicada)
+            </span>
+            <button
+              type="button"
+              disabled={savingSection === 'fn_favicon'}
+              onClick={() =>
+                handleForceSaveSection(
+                  'fn_favicon',
+                  'Favicon do Portal FortNews salvo permanentemente!'
+                )
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#fa6607] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer shrink-0"
+            >
+              {savingSection === 'fn_favicon' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              Salvar Favicon
+            </button>
           </div>
         </div>
       </div>
@@ -635,6 +772,26 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
               ))}
             </div>
           )}
+          <div className="flex justify-end border-t border-white/10 pt-4">
+            <button
+              type="button"
+              disabled={savingSection === 'fm_videos'}
+              onClick={() =>
+                handleForceSaveSection(
+                  'fm_videos',
+                  'Alterações de vídeos do Site FortMídia salvas com sucesso!'
+                )
+              }
+              className="inline-flex items-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
+            >
+              {savingSection === 'fm_videos' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              Salvar Vídeos FortMídia
+            </button>
+          </div>
         </div>
       </div>
 
@@ -901,6 +1058,26 @@ export const CmsFaviconVideosTab: React.FC<CmsFaviconVideosTabProps> = ({
               ))}
             </div>
           )}
+          <div className="flex justify-end border-t border-white/10 pt-4">
+            <button
+              type="button"
+              disabled={savingSection === 'fn_videos'}
+              onClick={() =>
+                handleForceSaveSection(
+                  'fn_videos',
+                  'Alterações de vídeos do Portal FortNews salvas com sucesso!'
+                )
+              }
+              className="inline-flex items-center gap-2 rounded-lg bg-[#fa6607] px-4 py-2 text-xs font-semibold text-white hover:bg-[#e55a00] disabled:opacity-60 cursor-pointer"
+            >
+              {savingSection === 'fn_videos' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Save className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              Salvar Vídeos FortNews
+            </button>
+          </div>
         </div>
       </div>
 

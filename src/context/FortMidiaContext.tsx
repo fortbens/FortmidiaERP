@@ -237,6 +237,7 @@ interface FortMidiaContextValue extends FortMidiaState {
   /* CMS Completo (FortMídia & Jornal FortNews) */
   updateSiteSettings: (patch: Partial<SiteSettings>) => void;
   updateNewsPortalSettings: (patch: Partial<NewsPortalSettings>) => void;
+  saveCmsChangesNow: () => Promise<{ ok: boolean; message: string }>;
   addQuota: (quota: Omit<CommercialQuota, 'id'>) => void;
   updateQuota: (id: string, patch: Partial<CommercialQuota>) => void;
   deleteQuota: (id: string) => void;
@@ -331,6 +332,85 @@ interface FortMidiaContextValue extends FortMidiaState {
 }
 
 const STORAGE_KEY = 'fortmidia_portal_state_v7';
+const FAVICON_STORAGE_KEY = 'fortmidia_favicons_v1';
+const LEGACY_SITE_FAVICON = '/assets/aistudio/Logo_FortM_dia_ded2b7d7.png';
+const LEGACY_NEWS_FAVICON =
+  '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__9741accd.png';
+const LEGACY_FORTNEWS_GRAY_LOGO = '/assets/aistudio/Logotipo_FortNews_vetorizado__9__b9ef51c4.png';
+const OFFICIAL_FORTNEWS_NEW_LOGO =
+  '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__26069d61.png';
+
+interface PersistedFavicons {
+  siteFaviconUrl?: string;
+  newsFaviconUrl?: string;
+  updatedAt?: number;
+}
+
+function readPersistedFavicons(): PersistedFavicons {
+  try {
+    const raw = localStorage.getItem(FAVICON_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PersistedFavicons;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePersistedFavicons(patch: Partial<PersistedFavicons>) {
+  try {
+    const current = readPersistedFavicons();
+    const next: PersistedFavicons = {
+      ...current,
+      ...patch,
+      updatedAt: Date.now(),
+    };
+    localStorage.setItem(FAVICON_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Ignore storage restrictions
+  }
+}
+
+function persistStateSafely(nextState: FortMidiaState): boolean {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+    return true;
+  } catch {
+    // If localStorage quota is exceeded by heavy embedded media, keep CMS settings & favicons persisted
+    try {
+      const compactState: FortMidiaState = {
+        ...nextState,
+        siteSettings: {
+          ...nextState.siteSettings,
+          heroVideoUrl:
+            nextState.siteSettings.heroVideoUrl?.startsWith('data:video/')
+              ? INITIAL_SITE_SETTINGS.heroVideoUrl
+              : nextState.siteSettings.heroVideoUrl,
+        },
+        newsPortalSettings: {
+          ...nextState.newsPortalSettings,
+          featuredVideoUrl:
+            nextState.newsPortalSettings.featuredVideoUrl?.startsWith('data:video/')
+              ? INITIAL_NEWS_PORTAL_SETTINGS.featuredVideoUrl
+              : nextState.newsPortalSettings.featuredVideoUrl,
+        },
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(compactState));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function migrateMarketingPresets(presets?: MarketingArtPreset[]): MarketingArtPreset[] {
+  if (!presets || presets.length === 0) return INITIAL_MARKETING_PRESETS;
+  return presets.map((p) =>
+    p.editorialLogoUrl === LEGACY_FORTNEWS_GRAY_LOGO
+      ? { ...p, editorialLogoUrl: OFFICIAL_FORTNEWS_NEW_LOGO }
+      : p
+  );
+}
 
 const DEFAULT_STATE: FortMidiaState = {
   citizenReports: INITIAL_CITIZEN_REPORTS,
@@ -434,11 +514,17 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [popupPreviewOpen, setPopupPreviewOpen] = useState(false);
 
   const [state, setState] = useState<FortMidiaState>(() => {
+    const persistedFavicons = readPersistedFavicons();
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as Partial<FortMidiaState>;
         const mergedSite = { ...INITIAL_SITE_SETTINGS, ...(parsed.siteSettings ?? {}) };
+        if (persistedFavicons.siteFaviconUrl?.trim()) {
+          mergedSite.faviconUrl = persistedFavicons.siteFaviconUrl.trim();
+        } else if (mergedSite.faviconUrl === LEGACY_SITE_FAVICON) {
+          mergedSite.faviconUrl = INITIAL_SITE_SETTINGS.faviconUrl;
+        }
         if (
           !mergedSite.whatsappNumber ||
           mergedSite.whatsappNumber === '5511999990000' ||
@@ -449,6 +535,16 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         if (!mergedSite.instagramUrl) mergedSite.instagramUrl = INITIAL_SITE_SETTINGS.instagramUrl;
         if (!mergedSite.facebookUrl) mergedSite.facebookUrl = INITIAL_SITE_SETTINGS.facebookUrl;
         if (!mergedSite.youtubeUrl) mergedSite.youtubeUrl = INITIAL_SITE_SETTINGS.youtubeUrl;
+
+        const mergedNews = {
+          ...INITIAL_NEWS_PORTAL_SETTINGS,
+          ...(parsed.newsPortalSettings ?? {}),
+        };
+        if (persistedFavicons.newsFaviconUrl?.trim()) {
+          mergedNews.faviconUrl = persistedFavicons.newsFaviconUrl.trim();
+        } else if (mergedNews.faviconUrl === LEGACY_NEWS_FAVICON) {
+          mergedNews.faviconUrl = INITIAL_NEWS_PORTAL_SETTINGS.faviconUrl;
+        }
 
         const hydratedMembers = hydrateTeamMembers(parsed.teamMembers);
         const validActiveId = hydratedMembers.some((m) => m.id === parsed.activeAdminUserId)
@@ -471,10 +567,7 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             lng: typeof pt.lng === 'number' ? pt.lng : -46.7272,
           })),
           siteSettings: mergedSite,
-          newsPortalSettings: {
-            ...INITIAL_NEWS_PORTAL_SETTINGS,
-            ...(parsed.newsPortalSettings ?? {}),
-          },
+          newsPortalSettings: mergedNews,
           quotas: parsed.quotas ?? COMMERCIAL_QUOTAS,
           galleryItems: parsed.galleryItems ?? INITIAL_GALLERY_ITEMS,
           popupConfig: { ...INITIAL_POPUP_CONFIG, ...(parsed.popupConfig ?? {}) },
@@ -483,10 +576,7 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           clientTasks: parsed.clientTasks ?? INITIAL_CLIENT_TASKS,
           agendaEvents: parsed.agendaEvents ?? INITIAL_AGENDA_EVENTS,
           notifications: parsed.notifications ?? INITIAL_NOTIFICATIONS,
-          marketingPresets:
-            parsed.marketingPresets && parsed.marketingPresets.length > 0
-              ? parsed.marketingPresets
-              : INITIAL_MARKETING_PRESETS,
+          marketingPresets: migrateMarketingPresets(parsed.marketingPresets),
           marketingPresetsLocked: parsed.marketingPresetsLocked ?? true,
           siteCmsPresets:
             parsed.siteCmsPresets && parsed.siteCmsPresets.length > 0
@@ -536,7 +626,18 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     } catch {
       // Fallback to default seed data if storage is unavailable
     }
-    return DEFAULT_STATE;
+    return {
+      ...DEFAULT_STATE,
+      siteSettings: {
+        ...DEFAULT_STATE.siteSettings,
+        faviconUrl: persistedFavicons.siteFaviconUrl?.trim() || DEFAULT_STATE.siteSettings.faviconUrl,
+      },
+      newsPortalSettings: {
+        ...DEFAULT_STATE.newsPortalSettings,
+        faviconUrl:
+          persistedFavicons.newsFaviconUrl?.trim() || DEFAULT_STATE.newsPortalSettings.faviconUrl,
+      },
+    };
   });
 
   // Sync CMS color theme dynamically with CSS variables
@@ -686,6 +787,22 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           const publicSnapshot =
             publicStateRes.ok && publicStateRes.data?.state ? publicStateRes.data.state : null;
 
+          const persistedFavicons = readPersistedFavicons();
+          const resolvedPublicSiteFavicon =
+            publicSnapshot?.siteSettings?.faviconUrl?.trim() &&
+            publicSnapshot.siteSettings.faviconUrl.trim() !== LEGACY_SITE_FAVICON
+              ? publicSnapshot.siteSettings.faviconUrl.trim()
+              : persistedFavicons.siteFaviconUrl?.trim() ||
+                publicSnapshot?.siteSettings?.faviconUrl?.trim() ||
+                INITIAL_SITE_SETTINGS.faviconUrl;
+          const resolvedPublicNewsFavicon =
+            publicSnapshot?.newsPortalSettings?.faviconUrl?.trim() &&
+            publicSnapshot.newsPortalSettings.faviconUrl.trim() !== LEGACY_NEWS_FAVICON
+              ? publicSnapshot.newsPortalSettings.faviconUrl.trim()
+              : persistedFavicons.newsFaviconUrl?.trim() ||
+                publicSnapshot?.newsPortalSettings?.faviconUrl?.trim() ||
+                INITIAL_NEWS_PORTAL_SETTINGS.faviconUrl;
+
           skipNextSnapshotSave.current = true;
           setState((prev) => ({
             ...prev,
@@ -698,10 +815,15 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               publicSnapshot?.outdoorPoints && publicSnapshot.outdoorPoints.length > 0
                 ? publicSnapshot.outdoorPoints
                 : prev.outdoorPoints,
-            siteSettings: { ...prev.siteSettings, ...(publicSnapshot?.siteSettings ?? {}) },
+            siteSettings: {
+              ...prev.siteSettings,
+              ...(publicSnapshot?.siteSettings ?? {}),
+              faviconUrl: resolvedPublicSiteFavicon,
+            },
             newsPortalSettings: {
               ...prev.newsPortalSettings,
               ...(publicSnapshot?.newsPortalSettings ?? {}),
+              faviconUrl: resolvedPublicNewsFavicon,
             },
             // Remove mocks privados da memória enquanto não autenticado no MySQL
             contracts: [],
@@ -854,6 +976,29 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               ? prev.activeAdminUserId
               : (resolvedMembers[0]?.id ?? prev.activeAdminUserId);
 
+          const persistedFavicons = readPersistedFavicons();
+          const serverSiteFav = snapshot?.siteSettings?.faviconUrl?.trim();
+          const serverNewsFav = snapshot?.newsPortalSettings?.faviconUrl?.trim();
+          const finalSiteFav =
+            serverSiteFav && serverSiteFav !== LEGACY_SITE_FAVICON
+              ? serverSiteFav
+              : persistedFavicons.siteFaviconUrl?.trim() ||
+                prev.siteSettings.faviconUrl ||
+                INITIAL_SITE_SETTINGS.faviconUrl;
+          const finalNewsFav =
+            serverNewsFav && serverNewsFav !== LEGACY_NEWS_FAVICON
+              ? serverNewsFav
+              : persistedFavicons.newsFaviconUrl?.trim() ||
+                prev.newsPortalSettings.faviconUrl ||
+                INITIAL_NEWS_PORTAL_SETTINGS.faviconUrl;
+
+          if (finalSiteFav || finalNewsFav) {
+            writePersistedFavicons({
+              siteFaviconUrl: finalSiteFav,
+              newsFaviconUrl: finalNewsFav,
+            });
+          }
+
           // Quando a API MySQL está online, usa diretamente as tabelas reais (mesmo vazias),
           // sem manter mocks locais como fallback silencioso.
           return {
@@ -879,11 +1024,17 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               nextTasks !== null ? nextTasks : (snapshot?.clientTasks ?? []),
             teamMembers: resolvedMembers,
             activeAdminUserId: matchedActiveId,
-            siteSettings: { ...prev.siteSettings, ...(snapshot?.siteSettings ?? {}) },
+            siteSettings: {
+              ...prev.siteSettings,
+              ...(snapshot?.siteSettings ?? {}),
+              faviconUrl: finalSiteFav,
+            },
             newsPortalSettings: {
               ...prev.newsPortalSettings,
               ...(snapshot?.newsPortalSettings ?? {}),
+              faviconUrl: finalNewsFav,
             },
+            marketingPresets: migrateMarketingPresets(snapshot?.marketingPresets ?? prev.marketingPresets),
             budgetCatalog: snapshot?.budgetCatalog
               ? hydrateBudgetCatalog(snapshot.budgetCatalog)
               : prev.budgetCatalog,
@@ -1061,14 +1212,16 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [refreshFromMysql]);
 
   useEffect(() => {
-    // Só persiste no localStorage quando /api/health confirmou modo offline (preview sem backend PHP).
+    // Persiste favicons sempre em chave leve dedicada para garantir permanência absoluta
+    writePersistedFavicons({
+      siteFaviconUrl: state.siteSettings.faviconUrl,
+      newsFaviconUrl: state.newsPortalSettings.faviconUrl,
+    });
+
+    // Só persiste o estado completo no localStorage quando /api/health confirmou modo offline (preview sem backend PHP).
     // Nunca grava no localStorage durante 'checking' nem em modo 'online' (MySQL é a única fonte).
     if (apiMode === 'offline') {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      } catch {
-        // Ignore quota errors in restricted sandboxes
-      }
+      persistStateSafely(state);
     }
 
     if (skipNextSnapshotSave.current) {
@@ -2195,17 +2348,81 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   /* CMS Completo */
   const updateSiteSettings = (patch: Partial<SiteSettings>) => {
-    setState((prev) => ({
-      ...prev,
-      siteSettings: { ...prev.siteSettings, ...patch },
-    }));
+    if (typeof patch.faviconUrl === 'string') {
+      writePersistedFavicons({ siteFaviconUrl: patch.faviconUrl.trim() });
+    }
+    setState((prev) => {
+      const next: FortMidiaState = {
+        ...prev,
+        siteSettings: { ...prev.siteSettings, ...patch },
+      };
+      if (apiModeRef.current !== 'online') {
+        persistStateSafely(next);
+      }
+      return next;
+    });
   };
 
   const updateNewsPortalSettings = (patch: Partial<NewsPortalSettings>) => {
-    setState((prev) => ({
-      ...prev,
-      newsPortalSettings: { ...prev.newsPortalSettings, ...patch },
-    }));
+    if (typeof patch.faviconUrl === 'string') {
+      writePersistedFavicons({ newsFaviconUrl: patch.faviconUrl.trim() });
+    }
+    setState((prev) => {
+      const next: FortMidiaState = {
+        ...prev,
+        newsPortalSettings: { ...prev.newsPortalSettings, ...patch },
+      };
+      if (apiModeRef.current !== 'online') {
+        persistStateSafely(next);
+      }
+      return next;
+    });
+  };
+
+  const saveCmsChangesNow = async (): Promise<{ ok: boolean; message: string }> => {
+    const current = stateRef.current;
+    writePersistedFavicons({
+      siteFaviconUrl: current.siteSettings.faviconUrl?.trim(),
+      newsFaviconUrl: current.newsPortalSettings.faviconUrl?.trim(),
+    });
+
+    if (apiModeRef.current === 'online') {
+      if (!hasApiSession()) {
+        const msg = 'Faça login como administrador para gravar as personalizações no servidor MySQL.';
+        setApiSyncError(msg);
+        return { ok: false, message: msg };
+      }
+      const sanitizedSnapshot: FortMidiaState = {
+        ...current,
+        teamMembers: current.teamMembers.map((m) => ({ ...m, password: '' })),
+      };
+      const res = await stateApi.saveSnapshot(sanitizedSnapshot);
+      if (!res.ok) {
+        reportApiError('salvar personalizações do CMS', res);
+        return {
+          ok: false,
+          message: res.error || 'Erro ao gravar personalizações do CMS no servidor.',
+        };
+      }
+      setApiSyncError(null);
+      return {
+        ok: true,
+        message: 'Personalizações CMS e favicons salvos permanentemente no servidor!',
+      };
+    }
+
+    const saved = persistStateSafely(current);
+    if (!saved) {
+      return {
+        ok: false,
+        message:
+          'Os favicons foram salvos, mas algum arquivo grande excedeu o armazenamento local. Use links URL para vídeos grandes.',
+      };
+    }
+    return {
+      ok: true,
+      message: 'Personalizações CMS salvas com sucesso e aplicadas permanentemente!',
+    };
   };
 
   const addQuota = (quota: Omit<CommercialQuota, 'id'>) => {
@@ -2716,11 +2933,26 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       activeGlobalPresetId: target.id,
       siteSettings:
         scope === 'all' || scope === 'fortmidia'
-          ? { ...prev.siteSettings, ...cloned.siteSettings }
+          ? {
+              ...prev.siteSettings,
+              ...cloned.siteSettings,
+              faviconUrl:
+                prev.siteSettings.faviconUrl && prev.siteSettings.faviconUrl !== LEGACY_SITE_FAVICON
+                  ? prev.siteSettings.faviconUrl
+                  : cloned.siteSettings.faviconUrl || prev.siteSettings.faviconUrl,
+            }
           : prev.siteSettings,
       newsPortalSettings:
         scope === 'all' || scope === 'fortnews'
-          ? { ...prev.newsPortalSettings, ...cloned.newsPortalSettings }
+          ? {
+              ...prev.newsPortalSettings,
+              ...cloned.newsPortalSettings,
+              faviconUrl:
+                prev.newsPortalSettings.faviconUrl &&
+                prev.newsPortalSettings.faviconUrl !== LEGACY_NEWS_FAVICON
+                  ? prev.newsPortalSettings.faviconUrl
+                  : cloned.newsPortalSettings.faviconUrl || prev.newsPortalSettings.faviconUrl,
+            }
           : prev.newsPortalSettings,
       popupConfig:
         scope === 'all' || scope === 'popup'
@@ -3271,6 +3503,7 @@ export const FortMidiaProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         deleteClientTask,
         updateSiteSettings,
         updateNewsPortalSettings,
+        saveCmsChangesNow,
         addQuota,
         updateQuota,
         deleteQuota,

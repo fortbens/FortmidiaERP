@@ -213,8 +213,8 @@ export const OFFICIAL_BRAND_LOGOS = [
     url: '/assets/aistudio/Gemini_Generated_Image_ov5owov5owov5owo_7f33ef20.jpg',
   },
   {
-    label: 'Logo FortNews Ondas (Vetor Oficial)',
-    url: '/assets/aistudio/Logotipo_FortNews_vetorizado__9__b9ef51c4.png',
+    label: 'Logo FortNews Padrão (Vetor Oficial)',
+    url: '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__26069d61.png',
   },
 ];
 
@@ -222,7 +222,7 @@ export const INITIAL_SITE_SETTINGS: SiteSettings = {
   brandName: 'Grupo',
   brandHighlight: 'FortMídia',
   logoUrl: '/assets/aistudio/Logo_FortM_dia_ded2b7d7.png',
-  faviconUrl: '/assets/aistudio/Logo_FortM_dia_ded2b7d7.png',
+  faviconUrl: '/assets/aistudio/Favicon_FortM_dia_b7dbe0d0.png',
   logoMode: 'image',
   logoHeightPx: 52,
   primaryColor: '#fa6607',
@@ -1538,8 +1538,8 @@ export const INITIAL_NEWS_PORTAL_SETTINGS: NewsPortalSettings = {
   primaryColor: '#fa6607',
   secondaryColor: '#d95300',
   domain: 'jornalfortnews.com.br',
-  logoUrl: '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__9741accd.png',
-  faviconUrl: '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__9741accd.png',
+  logoUrl: '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__26069d61.png',
+  faviconUrl: '/assets/aistudio/Favicon_FortNews_dc2d65e3.png',
   logoHeightPx: 52,
   logoFitMode: 'wide',
   breakingTickerEnabled: true,

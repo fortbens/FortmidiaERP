@@ -39,30 +39,46 @@ function readStoredPublicTheme(): PublicTheme {
   return 'dark';
 }
 
+function detectFaviconMime(url: string): string {
+  const lower = url.toLowerCase();
+  if (lower.startsWith('data:image/svg+xml') || lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.startsWith('data:image/x-icon') || lower.endsWith('.ico')) return 'image/x-icon';
+  if (lower.startsWith('data:image/webp') || lower.endsWith('.webp')) return 'image/webp';
+  if (lower.startsWith('data:image/jpeg') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+    return 'image/jpeg';
+  }
+  return 'image/png';
+}
+
 function DynamicFaviconSync({ view }: { view: AppRouteView }) {
   const { siteSettings, newsPortalSettings } = useFortMidia();
 
   useEffect(() => {
-    const candidate =
+    const candidate = (
       view === 'fortnews'
         ? newsPortalSettings.faviconUrl || newsPortalSettings.logoUrl
-        : siteSettings.faviconUrl || siteSettings.logoUrl;
+        : siteSettings.faviconUrl || siteSettings.logoUrl
+    )?.trim();
 
     if (!candidate || !isSafeMediaUrl(candidate)) return;
 
-    const upsertLink = (rel: string) => {
-      let link = document.querySelector<HTMLLinkElement>(`link[rel="${rel}"]`);
-      if (!link) {
-        link = document.createElement('link');
-        link.rel = rel;
-        document.head.appendChild(link);
+    const mimeType = detectFaviconMime(candidate);
+
+    const replaceLink = (rel: string) => {
+      const existing = document.querySelectorAll<HTMLLinkElement>(`link[rel="${rel}"]`);
+      existing.forEach((node) => node.remove());
+      const link = document.createElement('link');
+      link.rel = rel;
+      if (rel !== 'apple-touch-icon') {
+        link.type = mimeType;
       }
       link.href = candidate;
+      document.head.appendChild(link);
     };
 
-    upsertLink('icon');
-    upsertLink('shortcut icon');
-    upsertLink('apple-touch-icon');
+    replaceLink('icon');
+    replaceLink('shortcut icon');
+    replaceLink('apple-touch-icon');
   }, [
     view,
     siteSettings.faviconUrl,

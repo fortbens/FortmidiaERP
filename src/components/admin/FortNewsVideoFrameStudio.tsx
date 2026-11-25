@@ -32,8 +32,11 @@ import {
 
 export type VideoFrameTemplate = 'reportagem_vertical' | 'news_horizontal';
 
-export const OFFICIAL_FORTNEWS_VECTOR_LOGO_URL =
+const LEGACY_FORTNEWS_VECTOR_LOGO_URL =
   '/assets/aistudio/Logotipo_FortNews_vetorizado__9__b9ef51c4.png';
+
+export const OFFICIAL_FORTNEWS_VECTOR_LOGO_URL =
+  '/assets/aistudio/Logo_FortNews_Vetorizado_Nova_Marca__Usar_Esse__26069d61.png';
 
 const VIDEO_FRAME_PRESETS_KEY = 'fortnews_video_frame_presets_v1';
 const VIDEO_FRAME_DEFAULT_PRESET_KEY = 'fortnews_video_frame_default_preset_v1';
@@ -244,13 +247,13 @@ function getVerticalFullScreenMetrics(
   const logoBottomY = logoTopY + drawH;
   // Entire logo sits cleanly ON TOP OF the pure white top band (zero overlap into black bar)
   const headerY = showLogo ? logoBottomY + 22 : 0;
-  const headlineAreaH = 186;
+  const headlineAreaH = 228;
   const videoY = headerY + headlineAreaH;
   const orangeFooterH = 164;
   const splitFooterH = 82;
   const splitFooterY = H - splitFooterH;
   const orangeFooterY = splitFooterY - orangeFooterH;
-  const videoH = Math.max(880, orangeFooterY - videoY);
+  const videoH = Math.max(860, orangeFooterY - videoY);
 
   return {
     drawW,
@@ -652,7 +655,12 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
       const raw = window.localStorage.getItem(VIDEO_FRAME_PRESETS_KEY);
       if (!raw) return [];
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.map((p: VideoFramePreset) =>
+        p?.logoUrl === LEGACY_FORTNEWS_VECTOR_LOGO_URL
+          ? { ...p, logoUrl: OFFICIAL_FORTNEWS_VECTOR_LOGO_URL }
+          : p
+      );
     } catch {
       return [];
     }
@@ -1012,47 +1020,54 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
           }
         }
 
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = '900 68px "Plus Jakarta Sans", Inter, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        const headLines = wrapCanvasText(
-          ctx,
-          (topHeadline || 'PLANTÃO REGIONAL').toUpperCase(),
-          585
-        ).slice(0, 2);
-        let hy = showLogo
-          ? headLines.length === 1
-            ? 286
-            : 238
-          : headLines.length === 1
-            ? 210
-            : 158;
-        for (const line of headLines) {
-          ctx.fillText(line, 44, hy);
-          hy += 82;
+        const plaqueHUsed = showLogo
+          ? Math.min(230, Math.max(120, Math.round(186 * Math.min(1.24, Math.max(0.4, Math.min(1.8, logoScale / 100))))))
+          : 0;
+        const topHeadMaxW = W - 88;
+        const topHeadZoneTop = showLogo ? plaqueHUsed + 22 : 42;
+        const topHeadZoneH = Math.max(140, headerH - topHeadZoneTop - 22);
+        const rawTopHead = (topHeadline || 'PLANTÃO REGIONAL').trim().toUpperCase();
+        const topExplicit = rawTopHead
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        let topFontPx = 66;
+        let topFittedLines: string[] = [];
+        const wrapTopWithSize = (fontPx: number) => {
+          ctx.font = `900 ${fontPx}px "Plus Jakarta Sans", Inter, sans-serif`;
+          if (topExplicit.length > 1) {
+            return topExplicit.flatMap((para) => wrapCanvasText(ctx, para, topHeadMaxW));
+          }
+          return wrapCanvasText(ctx, rawTopHead, topHeadMaxW);
+        };
+
+        while (topFontPx >= 36) {
+          const candidate = wrapTopWithSize(topFontPx);
+          const lineH = Math.round(topFontPx * 1.18);
+          if (candidate.length <= 3 && candidate.length * lineH <= topHeadZoneH) {
+            topFittedLines = candidate;
+            break;
+          }
+          topFontPx -= 2;
+        }
+        if (topFittedLines.length === 0) {
+          topFontPx = 36;
+          topFittedLines = wrapTopWithSize(topFontPx).slice(0, 3);
         }
 
-        const cleanCity = (cityTag || 'CIMBAJU').trim().toUpperCase();
-        ctx.font = '900 54px "Plus Jakarta Sans", Inter, sans-serif';
-        const measuredCityW = ctx.measureText(cleanCity).width;
-        const badgeW = Math.min(540, Math.max(330, measuredCityW + 84));
-        const badgeH = 104;
-        const badgeX = W - badgeW;
-        const badgeY = 368;
-        drawRoundedRectPath(ctx, badgeX, badgeY, badgeW, badgeH, {
-          tl: 28,
-          tr: 0,
-          br: 0,
-          bl: 28,
-        });
-        ctx.fillStyle = accentColor;
-        ctx.fill();
+        const topLineH = Math.round(topFontPx * 1.18);
+        const topBlockH = topFittedLines.length * topLineH;
+        let hy = topHeadZoneTop + Math.max(0, Math.round((topHeadZoneH - topBlockH) / 2));
 
         ctx.fillStyle = '#FFFFFF';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(cleanCity, badgeX + badgeW / 2, badgeY + badgeH / 2 + 2, badgeW - 44);
+        ctx.font = `900 ${topFontPx}px "Plus Jakarta Sans", Inter, sans-serif`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        for (const line of topFittedLines) {
+          ctx.fillText(line, 44, hy, topHeadMaxW);
+          hy += topLineH;
+        }
         ctx.restore();
 
         if (showViewfinder) {
@@ -1068,6 +1083,39 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
             'rgba(170,176,184,0.9)',
             accentColor
           );
+        }
+
+        // Tag Laranja (Cidade / Região) posicionada na moldura, próxima à cantoneira superior direita
+        const cleanCity = (cityTag || '').trim().toUpperCase();
+        if (cleanCity) {
+          ctx.save();
+          ctx.font = '900 32px "Plus Jakarta Sans", Inter, sans-serif';
+          const measuredCityW = ctx.measureText(cleanCity).width;
+          const pillW = Math.min(440, Math.max(176, measuredCityW + 46));
+          const pillH = 54;
+          const pillX = W - 52 - pillW;
+          const pillY = videoY + 52;
+
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.32)';
+          ctx.shadowBlur = 10;
+          ctx.shadowOffsetY = 3;
+          drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, {
+            tl: 12,
+            tr: 12,
+            br: 12,
+            bl: 12,
+          });
+          ctx.fillStyle = accentColor;
+          ctx.fill();
+
+          ctx.shadowColor = 'transparent';
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetY = 0;
+          ctx.fillStyle = '#050507';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(cleanCity, pillX + pillW / 2, pillY + pillH / 2 + 2, pillW - 24);
+          ctx.restore();
         }
 
         ctx.save();
@@ -1208,112 +1256,63 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         ctx.fillStyle = accentColor;
         ctx.fillRect(cardX, headerY, 16, headerH);
 
-        // 3. Bold White 2-Line Headline + Inline Rounded Orange Tag Pill (e.g. CIMBAJU)
-        const rawTitle = (reportagemTitle || 'COBERTURA EXCLUSIVA\nMATÉRIA EM VÍDEO')
+        // 3. Clean Full-Width White Headline inside the Black Header Bar (up to 3 lines, expanded capacity)
+        const rawTitle = (reportagemTitle || 'COBERTURA EXCLUSIVA')
           .trim()
           .toUpperCase();
-        const vCity = (reportagemCityTag || 'CIMBAJU').trim().toUpperCase();
+        const vCity = (reportagemCityTag || '').trim().toUpperCase();
 
         ctx.save();
-        const headlineLeftX = 52;
+        const headlineLeftX = 48;
         const headlineRightLimit = W - 44;
         const fullLineMaxW = headlineRightLimit - headlineLeftX;
+        const availHeadlineH = headerH - 28;
 
-        // Pre-measure inline orange city pill width
-        ctx.font = '900 36px "Plus Jakarta Sans", Inter, sans-serif';
-        const pillTextW = vCity ? ctx.measureText(vCity).width : 0;
-        const pillW = vCity ? Math.min(320, Math.max(180, pillTextW + 46)) : 0;
-        const pillH = 56;
-        const pillGap = vCity ? 28 : 0;
-
-        let titleFontSize = 64;
-        ctx.font = `900 ${titleFontSize}px "Plus Jakarta Sans", Inter, sans-serif`;
         const explicitLines = rawTitle
           .split('\n')
           .map((s) => s.trim())
           .filter(Boolean);
-        let line1 = '';
-        let line2 = '';
 
-        if (explicitLines.length >= 2) {
-          line1 = explicitLines[0];
-          line2 = explicitLines.slice(1).join(' ');
-        } else {
-          const wrapped = wrapCanvasText(ctx, rawTitle, fullLineMaxW);
-          if (wrapped.length >= 2) {
-            line1 = wrapped[0];
-            line2 = wrapped.slice(1).join(' ');
-          } else {
-            line1 = wrapped[0] || rawTitle;
-            line2 = '';
+        const wrapHeadlineAtSize = (fontPx: number) => {
+          ctx.font = `900 ${fontPx}px "Plus Jakarta Sans", Inter, sans-serif`;
+          if (explicitLines.length > 1) {
+            return explicitLines.flatMap((para) => wrapCanvasText(ctx, para, fullLineMaxW));
           }
-        }
+          return wrapCanvasText(ctx, rawTitle, fullLineMaxW);
+        };
 
-        const line2MaxW = vCity ? fullLineMaxW - pillW - pillGap : fullLineMaxW;
-        while (titleFontSize > 42) {
-          ctx.font = `900 ${titleFontSize}px "Plus Jakarta Sans", Inter, sans-serif`;
-          const w1 = ctx.measureText(line1).width;
-          const w2 = line2 ? ctx.measureText(line2).width : 0;
-          if (w1 <= fullLineMaxW && w2 <= line2MaxW) break;
+        let titleFontSize = 66;
+        let fittedLines: string[] = [];
+        while (titleFontSize >= 34) {
+          const candidate = wrapHeadlineAtSize(titleFontSize);
+          const lineStep = Math.round(titleFontSize * 1.18);
+          const widest = candidate.reduce((mW, ln) => Math.max(mW, ctx.measureText(ln).width), 0);
+          if (
+            candidate.length <= 3 &&
+            candidate.length * lineStep <= availHeadlineH &&
+            widest <= fullLineMaxW + 4
+          ) {
+            fittedLines = candidate;
+            break;
+          }
           titleFontSize -= 2;
         }
+        if (fittedLines.length === 0) {
+          titleFontSize = 34;
+          fittedLines = wrapHeadlineAtSize(titleFontSize).slice(0, 3);
+        }
+
+        const lineStep = Math.round(titleFontSize * 1.18);
+        const totalBlockH = fittedLines.length * lineStep;
+        let lineY = headerY + Math.round((headerH - totalBlockH) / 2) + Math.round(lineStep / 2);
 
         ctx.font = `900 ${titleFontSize}px "Plus Jakarta Sans", Inter, sans-serif`;
         ctx.fillStyle = '#FFFFFF';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-
-        const headlineZoneMid = headerY + headerH / 2;
-
-        if (line2) {
-          const line1Y = headlineZoneMid - 38;
-          const line2Y = headlineZoneMid + 38;
-          ctx.fillText(line1, headlineLeftX, line1Y, fullLineMaxW);
-          ctx.fillText(line2, headlineLeftX, line2Y, line2MaxW);
-
-          if (vCity) {
-            const line2ActualW = Math.min(line2MaxW, ctx.measureText(line2).width);
-            const pillX = Math.min(
-              headlineRightLimit - pillW,
-              Math.max(headlineLeftX + line2ActualW + 34, headlineRightLimit - pillW - 6)
-            );
-            const pillY = line2Y - pillH / 2 - 2;
-            drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, {
-              tl: 14,
-              tr: 14,
-              br: 14,
-              bl: 14,
-            });
-            ctx.fillStyle = accentColor;
-            ctx.fill();
-
-            ctx.fillStyle = '#050507';
-            ctx.font = '900 36px "Plus Jakarta Sans", Inter, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(vCity, pillX + pillW / 2, pillY + pillH / 2 + 2, pillW - 24);
-          }
-        } else {
-          const singleY = headlineZoneMid;
-          ctx.fillText(line1, headlineLeftX, singleY, line2MaxW);
-          if (vCity) {
-            const pillX = headlineRightLimit - pillW;
-            const pillY = singleY - pillH / 2 - 2;
-            drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, {
-              tl: 14,
-              tr: 14,
-              br: 14,
-              bl: 14,
-            });
-            ctx.fillStyle = accentColor;
-            ctx.fill();
-
-            ctx.fillStyle = '#050507';
-            ctx.font = '900 36px "Plus Jakarta Sans", Inter, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(vCity, pillX + pillW / 2, pillY + pillH / 2 + 2, pillW - 24);
-          }
+        for (const line of fittedLines) {
+          ctx.fillText(line, headlineLeftX, lineY, fullLineMaxW);
+          lineY += lineStep;
         }
         ctx.restore();
 
@@ -1331,6 +1330,38 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
             'rgba(150, 155, 163, 0.92)',
             accentColor
           );
+        }
+
+        // 5b. Orange City / Region Tag Pill tucked cleanly near the Top-Right Viewfinder Bracket
+        if (vCity) {
+          ctx.save();
+          ctx.font = '900 36px "Plus Jakarta Sans", Inter, sans-serif';
+          const pillTextW = ctx.measureText(vCity).width;
+          const pillW = Math.min(440, Math.max(190, pillTextW + 52));
+          const pillH = 60;
+          const pillX = cardW - 62 - pillW;
+          const pillY = videoY + 62;
+
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.30)';
+          ctx.shadowBlur = 10;
+          ctx.shadowOffsetY = 3;
+          drawRoundedRectPath(ctx, pillX, pillY, pillW, pillH, {
+            tl: 14,
+            tr: 14,
+            br: 14,
+            bl: 14,
+          });
+          ctx.fillStyle = accentColor;
+          ctx.fill();
+
+          ctx.shadowColor = 'transparent';
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetY = 0;
+          ctx.fillStyle = '#050507';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(vCity, pillX + pillW / 2, pillY + pillH / 2 + 2, pillW - 26);
+          ctx.restore();
         }
 
         // 6. Full-Width Bottom Solid Orange Editorial Banner
@@ -1685,20 +1716,17 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     const p = pautas.find((item) => item.id === pautaId);
     if (!p) return;
 
-    const shortTop = p.seal === 'Break News' || p.seal === 'Urgente'
-      ? `PLANTÃO\n${p.seal.toUpperCase()}`
-      : p.title.split(' ').slice(0, 4).join(' ').toUpperCase();
+    const shortTop =
+      p.title.length > 96 ? `${p.title.slice(0, 93).trim()}...` : p.title;
 
-    setTopHeadline(shortTop);
-    setCityTag(p.city.toUpperCase());
+    setTopHeadline(shortTop.toUpperCase());
+    setCityTag(p.city.replace('Regional ', '').toUpperCase());
     setBottomHeadline(p.title.toUpperCase());
     setLeadText(p.summary);
 
-    const words = p.title.toUpperCase().split(/\s+/).filter(Boolean);
-    const splitMid = Math.ceil(Math.min(words.length, 6) / 2);
-    const rLine1 = words.slice(0, splitMid).join(' ');
-    const rLine2 = words.slice(splitMid, 6).join(' ') || 'MATÉRIA EM VÍDEO';
-    setReportagemTitle(`${rLine1}\n${rLine2}`);
+    const cleanReportagemHeadline =
+      p.title.length > 125 ? `${p.title.slice(0, 122).trim()}...` : p.title;
+    setReportagemTitle(cleanReportagemHeadline.toUpperCase());
     setReportagemCityTag(p.city.replace('Regional ', '').toUpperCase());
 
     if (p.imageUrl && mediaSourceType === 'photo') {
@@ -2046,7 +2074,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
               <span className="font-mono text-[10px] text-zinc-400">1080×1920</span>
             </div>
             <p className="mt-1.5 text-[11px] text-zinc-400 leading-relaxed">
-              Tela cheia 100% sem margens laterais, logo oficial FortNews vetorizado redimensionável, manchete em 2 linhas + tag CIMBAJU, cantoneiras, tarja REPORTAGEM e rodapé diagonal.
+              Tela cheia 100%, faixa preta limpa em largura total para manchetes maiores (até 3 linhas), tag laranja da cidade dentro da moldura na cantoneira superior direita, tarja REPORTAGEM e rodapé diagonal.
             </p>
           </button>
 
@@ -2067,7 +2095,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
               <span className="font-mono text-[10px] text-zinc-400">1080×1920</span>
             </div>
             <p className="mt-1.5 text-[11px] text-zinc-400 leading-relaxed">
-              Topo escuro com logo oficial FortNews, manchete + tag laranja da cidade, vídeo horizontal central com mira nos cantos, faixa laranja com ícone de vídeo e card branco inferior.
+              Topo escuro limpo para manchete ampliada (até 3 linhas), tag laranja posicionada na cantoneira superior direita do vídeo horizontal, faixa laranja com ícone de vídeo e card branco inferior.
             </p>
           </button>
         </div>
@@ -2268,26 +2296,31 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
               <div className="space-y-4">
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
-                    <label className="mb-1 block text-[11px] text-zinc-400">
-                      Chamada Superior (2 linhas · Esquerda)
-                    </label>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <label className="block text-[11px] text-zinc-400">
+                        Chamada / Manchete Superior (Largura total · até 3 linhas)
+                      </label>
+                      <span className="font-mono text-[10px] text-zinc-500 tabular-nums">
+                        {topHeadline.length} caracteres
+                      </span>
+                    </div>
                     <textarea
-                      rows={2}
+                      rows={3}
                       value={topHeadline}
                       onChange={(e) => setTopHeadline(e.target.value)}
-                      placeholder="Ex: MEGAOPERAÇÃO&#10;DA PM"
+                      placeholder="Digite a chamada ou manchete completa com ajuste automático de fonte"
                       className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white focus:border-[#fa6607] focus:outline-none"
                     />
                   </div>
                   <div>
                     <label className="mb-1 block text-[11px] text-zinc-400">
-                      Tag Laranja da Cidade / Editoria (Direita)
+                      Tag Laranja na Moldura (Cidade / Região · Cantoneira Sup. Dir.)
                     </label>
                     <input
                       type="text"
                       value={cityTag}
                       onChange={(e) => setCityTag(e.target.value)}
-                      placeholder="Ex: MAIRIPORÃ ou CAIEIRAS"
+                      placeholder="Ex: MAIRIPORÃ ou CIMBAJU (vazio oculta)"
                       className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white focus:border-[#fa6607] focus:outline-none"
                     />
                     <div className="mt-1.5 flex flex-wrap gap-1">
@@ -2332,14 +2365,19 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
             ) : (
               <div className="space-y-4">
                 <div>
-                  <label className="mb-1 block text-[11px] text-zinc-400">
-                    Manchete do Topo (2 linhas · Caixa Alta)
-                  </label>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <label className="block text-[11px] text-zinc-400">
+                      Chamada / Manchete na Faixa Preta (Largura total · até 3 linhas)
+                    </label>
+                    <span className="font-mono text-[10px] text-zinc-500 tabular-nums">
+                      {reportagemTitle.length} caracteres
+                    </span>
+                  </div>
                   <textarea
-                    rows={2}
+                    rows={3}
                     value={reportagemTitle}
                     onChange={(e) => setReportagemTitle(e.target.value)}
-                    placeholder={'COBERTURA EXCLUSIVA\nMATÉRIA EM VÍDEO'}
+                    placeholder="Digite sua manchete ou chamada completa — o texto se ajusta automaticamente em até 3 linhas limpas"
                     className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white focus:border-[#fa6607] focus:outline-none"
                   />
                 </div>
@@ -2347,13 +2385,13 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="mb-1 block text-[11px] text-zinc-400">
-                      Tag Laranja ao lado da 2ª Linha (Cidade / Região)
+                      Tag Laranja na Moldura (Cidade / Região · Cantoneira Sup. Dir.)
                     </label>
                     <input
                       type="text"
                       value={reportagemCityTag}
                       onChange={(e) => setReportagemCityTag(e.target.value)}
-                      placeholder="Ex: CIMBAJU"
+                      placeholder="Ex: CIMBAJU (vazio oculta)"
                       className="w-full rounded-lg border border-white/15 bg-[#0A0A0A] px-3 py-2 text-xs text-white focus:border-[#fa6607] focus:outline-none"
                     />
                     <div className="mt-1.5 flex flex-wrap gap-1">
