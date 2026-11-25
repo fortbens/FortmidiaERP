@@ -50,9 +50,10 @@ interface MarketingStudioModuleProps {
 type StudioMode = 'artes' | 'capas' | 'molduras' | 'convite' | 'legendas';
 type FormatId =
   | 'feed_4_5'
+  | 'portal_fortnews_16_9'
+  | 'portal_16_9'
   | 'square_1_1'
   | 'story_9_16'
-  | 'portal_16_9'
   | 'youtube_16_9'
   | 'reels_9_16'
   | 'shorts_9_16';
@@ -68,18 +69,26 @@ type WatermarkPos =
 type MaskMode = 'dark' | 'light' | 'custom';
 type ArtFrameTemplate = 'classic' | 'fortnews_editorial';
 
+const OFFICIAL_FORTNEWS_VECTOR_LOGO =
+  '/assets/aistudio/Logotipo_FortNews_vetorizado__9__b9ef51c4.png';
+
 const ALL_FORMAT_SPECS: Record<FormatId, { label: string; w: number; h: number }> = {
   feed_4_5: { label: 'Instagram Feed (1080×1350)', w: 1080, h: 1350 },
+  portal_fortnews_16_9: {
+    label: 'Portal FortNews — Capa de Matéria 16:9 (1280×720 · Indicado)',
+    w: 1280,
+    h: 720,
+  },
+  portal_16_9: { label: 'Portal FortNews — Link / WhatsApp OG (1200×630)', w: 1200, h: 630 },
   square_1_1: { label: 'Feed Quadrado (1080×1080)', w: 1080, h: 1080 },
   story_9_16: { label: 'Stories / Vertical (1080×1920)', w: 1080, h: 1920 },
-  portal_16_9: { label: 'Capa Portal / Link (1200×630)', w: 1200, h: 630 },
   youtube_16_9: { label: 'Capa YouTube / Live (1280×720)', w: 1280, h: 720 },
   reels_9_16: { label: 'Capa Instagram Reels (1080×1920)', w: 1080, h: 1920 },
   shorts_9_16: { label: 'Capa YouTube Shorts (1080×1920)', w: 1080, h: 1920 },
 };
 
 const MODE_FORMATS: Record<StudioMode, FormatId[]> = {
-  artes: ['feed_4_5', 'square_1_1', 'story_9_16', 'portal_16_9'],
+  artes: ['feed_4_5', 'portal_fortnews_16_9', 'portal_16_9', 'square_1_1', 'story_9_16'],
   capas: ['youtube_16_9', 'reels_9_16', 'shorts_9_16'],
   molduras: ['reels_9_16'],
   convite: ['feed_4_5', 'story_9_16', 'youtube_16_9'],
@@ -147,102 +156,64 @@ function drawRoundedPill(
   ctx.closePath();
 }
 
-function drawEditorialFortNewsSeamBadge(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  seamY: number,
-  scale: number,
-  accentColor: string
-) {
-  ctx.save();
-  ctx.translate(cx, seamY);
-  ctx.scale(scale, scale);
+function trimTransparentLogo(img: HTMLImageElement): HTMLCanvasElement | null {
+  try {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (!w || !h) return null;
 
-  // 1. Symmetric Audio Waveform above the badge (white left + accent right with contrast shadow)
-  const halfHeights = [
-    5, 9, 17, 11, 23, 15, 9, 20, 32, 16, 11, 28, 48, 26, 15, 20, 35, 22, 13, 25, 42, 22, 13, 19,
-    29, 16, 10, 18,
-  ];
-  const barW = 3.8;
-  const step = 8.4;
-  const totalBars = halfHeights.length * 2 - 1;
-  const waveStartX = -((totalBars - 1) * step) / 2;
-  const waveCy = -92;
+    const maxScan = 512;
+    const scanScale = Math.min(1, maxScan / Math.max(w, h));
+    const sw = Math.max(1, Math.round(w * scanScale));
+    const sh = Math.max(1, Math.round(h * scanScale));
 
-  ctx.save();
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
-  ctx.shadowBlur = 8;
-  ctx.shadowOffsetY = 2;
-  for (let i = 0; i < totalBars; i++) {
-    const mirrorIdx = i < halfHeights.length ? i : totalBars - 1 - i;
-    const bh = halfHeights[mirrorIdx];
-    const bx = waveStartX + i * step - barW / 2;
-    const by = waveCy - bh / 2;
-    ctx.fillStyle = i < halfHeights.length ? '#FFFFFF' : accentColor;
-    drawRoundedPill(ctx, bx, by, barW, bh, 2);
-    ctx.fill();
+    const scanCanvas = document.createElement('canvas');
+    scanCanvas.width = sw;
+    scanCanvas.height = sh;
+    const sctx = scanCanvas.getContext('2d', { willReadFrequently: true });
+    if (!sctx) return null;
+    sctx.drawImage(img, 0, 0, sw, sh);
+    const data = sctx.getImageData(0, 0, sw, sh).data;
+
+    let minX = sw;
+    let minY = sh;
+    let maxX = 0;
+    let maxY = 0;
+    let found = false;
+
+    for (let y = 0; y < sh; y++) {
+      for (let x = 0; x < sw; x++) {
+        const a = data[(y * sw + x) * 4 + 3];
+        if (a > 12) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+          found = true;
+        }
+      }
+    }
+
+    if (!found || maxX <= minX || maxY <= minY) return null;
+
+    const pad = 4;
+    const sx = Math.max(0, Math.floor(minX / scanScale) - pad);
+    const sy = Math.max(0, Math.floor(minY / scanScale) - pad);
+    const ex = Math.min(w, Math.ceil((maxX + 1) / scanScale) + pad);
+    const ey = Math.min(h, Math.ceil((maxY + 1) / scanScale) + pad);
+    const cw = Math.max(1, ex - sx);
+    const ch = Math.max(1, ey - sy);
+
+    const out = document.createElement('canvas');
+    out.width = cw;
+    out.height = ch;
+    const octx = out.getContext('2d');
+    if (!octx) return null;
+    octx.drawImage(img, sx, sy, cw, ch, 0, 0, cw, ch);
+    return out;
+  } catch {
+    return null;
   }
-  ctx.restore();
-
-  // 2. Diagonal Split FortNews Badge (Orange left "Fort" + Metallic Grey right "News")
-  const badgeW = 548;
-  const badgeH = 110;
-  const slant = 30;
-  const leftX = -badgeW / 2;
-  const midX = -20;
-  const rightX = badgeW / 2;
-  const topY = -62;
-  const botY = topY + badgeH;
-
-  ctx.save();
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.24)';
-  ctx.shadowBlur = 18;
-  ctx.shadowOffsetY = 6;
-
-  // Left Orange Trapezoid
-  ctx.beginPath();
-  ctx.moveTo(leftX + slant, topY);
-  ctx.lineTo(midX + slant * 0.55, topY);
-  ctx.lineTo(midX - slant * 0.45, botY);
-  ctx.lineTo(leftX, botY);
-  ctx.closePath();
-  ctx.fillStyle = accentColor;
-  ctx.fill();
-
-  // Right Cool Grey Trapezoid (matching Padrão de Notícias FortNews reference)
-  ctx.beginPath();
-  ctx.moveTo(midX + slant * 0.55, topY);
-  ctx.lineTo(rightX, topY);
-  ctx.lineTo(rightX - slant, botY);
-  ctx.lineTo(midX - slant * 0.45, botY);
-  ctx.closePath();
-  ctx.fillStyle = '#9EA2A8';
-  ctx.fill();
-  ctx.restore();
-
-  // Wordmark: "Fort" (Black on Orange) & "News" (Orange on Grey)
-  ctx.font = '900 72px "Plus Jakarta Sans", Inter, sans-serif';
-  ctx.textBaseline = 'middle';
-
-  ctx.fillStyle = '#050507';
-  ctx.textAlign = 'right';
-  ctx.fillText('Fort', midX - 8, topY + 48);
-
-  ctx.fillStyle = accentColor;
-  ctx.textAlign = 'left';
-  ctx.fillText('News', midX + 16, topY + 48);
-
-  // Subtitle split: "INFORMAÇÃO" (black) + "QUE CONECTA VOCÊ" (white)
-  ctx.font = '800 16px "Plus Jakarta Sans", Inter, sans-serif';
-  ctx.fillStyle = '#050507';
-  ctx.textAlign = 'right';
-  ctx.fillText('I N F O R M A Ç Ã O', midX - 16, botY - 14);
-
-  ctx.fillStyle = '#FFFFFF';
-  ctx.textAlign = 'left';
-  ctx.fillText('Q U E   C O N E C T A   V O C Ê', midX + 6, botY - 14);
-
-  ctx.restore();
 }
 
 function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
@@ -357,7 +328,10 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
   );
   const [formatId, setFormatId] = useState<FormatId>('feed_4_5');
   const [artFrameTemplate, setArtFrameTemplate] = useState<ArtFrameTemplate>('classic');
+  const [showEditorialLogo, setShowEditorialLogo] = useState<boolean>(true);
+  const [editorialLogoUrl, setEditorialLogoUrl] = useState<string>(OFFICIAL_FORTNEWS_VECTOR_LOGO);
   const [editorialLogoScale, setEditorialLogoScale] = useState<number>(100);
+  const [editorialLogoAlign, setEditorialLogoAlign] = useState<'center' | 'left'>('center');
   const [editorialFooterSlogan, setEditorialFooterSlogan] = useState<string>(
     'Informação que conecta você'
   );
@@ -717,7 +691,12 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
     if (preset.programLogoUrl) setProgramLogoUrl(preset.programLogoUrl);
     if (preset.bgImageUrl) setBgImageUrl(preset.bgImageUrl);
     if (preset.artFrameTemplate) setArtFrameTemplate(preset.artFrameTemplate);
+    if (typeof preset.showEditorialLogo === 'boolean') {
+      setShowEditorialLogo(preset.showEditorialLogo);
+    }
+    if (preset.editorialLogoUrl) setEditorialLogoUrl(preset.editorialLogoUrl);
     if (preset.editorialLogoScale) setEditorialLogoScale(preset.editorialLogoScale);
+    if (preset.editorialLogoAlign) setEditorialLogoAlign(preset.editorialLogoAlign);
     if (preset.editorialFooterSlogan) setEditorialFooterSlogan(preset.editorialFooterSlogan);
     flashPresetNotice(`Preset "${preset.name}" aplicado.`);
   };
@@ -772,7 +751,10 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
       programLogoUrl,
       bgImageUrl: studioMode === 'convite' ? bgImageUrl : existing?.bgImageUrl,
       artFrameTemplate,
+      showEditorialLogo,
+      editorialLogoUrl,
       editorialLogoScale,
+      editorialLogoAlign,
       editorialFooterSlogan,
       lockedBySuperAdmin: marketingPresetsLocked,
       updatedBy: activeOperator?.name || 'Super Admin',
@@ -823,27 +805,30 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
 
       // ==================== MOLDURA EDITORIAL FORTNEWS (NOTÍCIA ESTÁTICA) ====================
       if (studioMode === 'artes' && artFrameTemplate === 'fortnews_editorial') {
-        const bgImg = await loadImg(bgImageUrl);
+        const [bgImg, rawEditorialLogo] = await Promise.all([
+          loadImg(bgImageUrl),
+          showEditorialLogo && editorialLogoUrl ? loadImg(editorialLogoUrl) : Promise.resolve(null),
+        ]);
         if (cancelled) return;
 
         const accent = topBarColor || '#fa6607';
-        const topAccentH = showTopBar ? Math.max(16, Math.round(H * 0.0155)) : 0;
-        const footerBarH = showFooterBar ? Math.round(H * (isCompactH ? 0.095 : 0.062)) : 0;
-        const photoH = Math.round(H * (isCompactH ? 0.45 : H >= 1600 ? 0.48 : 0.54));
+        const topAccentH = showTopBar ? Math.max(14, Math.round(H * 0.015)) : 0;
+        const footerBarH = showFooterBar ? Math.round(H * (isCompactH ? 0.092 : 0.062)) : 0;
+        const photoH = Math.round(H * (isCompactH ? 0.42 : H >= 1600 ? 0.45 : 0.49));
         const photoY = topAccentH;
         const photoBottomY = photoY + photoH;
 
-        // 1. Clean Editorial Off-White Canvas
-        ctx.fillStyle = '#F7F7F9';
+        // 1. Pure Clean White Card Background (so the real uploaded/official logo stays 100% faithful)
+        ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, W, H);
 
-        // 2. Top Solid Orange Bar
+        // 2. Top Solid Accent Bar
         if (topAccentH > 0) {
           ctx.fillStyle = accent;
           ctx.fillRect(0, 0, W, topAccentH);
         }
 
-        // 3. Top Full-Bleed Photo Viewport with Zoom + Bottom Warm Orange Fade
+        // 3. Top Full-Bleed Photo Viewport with Zoom + Clean Accent Divider Line (no distortive mask)
         ctx.save();
         ctx.beginPath();
         ctx.rect(0, photoY, W, photoH);
@@ -860,27 +845,39 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
           const dy = photoY + (photoH - dh) / 2;
           ctx.drawImage(bgImg, dx, dy, dw, dh);
         }
-
-        // Bottom warm orange gradient fade matching Padrão de Notícias FortNews
-        const fadeH = Math.round(photoH * 0.25);
-        const fadeGrad = ctx.createLinearGradient(0, photoBottomY - fadeH, 0, photoBottomY);
-        fadeGrad.addColorStop(0, hexToRgba(accent, 0));
-        fadeGrad.addColorStop(0.55, hexToRgba(accent, 0.62));
-        fadeGrad.addColorStop(1, hexToRgba(accent, 0.96));
-        ctx.fillStyle = fadeGrad;
-        ctx.fillRect(0, photoBottomY - fadeH, W, fadeH);
         ctx.restore();
 
-        // 4. Centered FortNews Waveform + Diagonal Orange/Grey Badge straddling the photo seam
-        const baseBadgeScale = (W / 1080) * (isCompactH ? 0.72 : 1) * (editorialLogoScale / 100);
-        drawEditorialFortNewsSeamBadge(ctx, W / 2, photoBottomY, baseBadgeScale, accent);
+        // Crisp accent line dividing top photo and clean white editorial area
+        const seamLineH = Math.max(6, Math.round(H * 0.0055));
+        ctx.fillStyle = accent;
+        ctx.fillRect(0, photoBottomY, W, seamLineH);
 
-        // 5. White Card Editorial Content (City + Category Pill + Bold Uppercase Headline + Lead)
+        // 4. Real Uploaded/Official Logo Placed Cleanly ON TOP OF THE WHITE AREA (never distorted)
         const edPadX = Math.round(W * 0.056);
         const maxTextW = W - edPadX * 2;
-        const badgeOverhang = Math.round(52 * baseBadgeScale);
-        let cursorY = photoBottomY + badgeOverhang + Math.round(H * (isCompactH ? 0.025 : 0.036));
+        let cursorY = photoBottomY + seamLineH + Math.round(H * (isCompactH ? 0.026 : 0.022));
         const contentMaxY = H - footerBarH - Math.round(H * 0.022);
+
+        if (showEditorialLogo && rawEditorialLogo) {
+          const logoSource = trimTransparentLogo(rawEditorialLogo) || rawEditorialLogo;
+          const aspect = logoSource.width / Math.max(1, logoSource.height);
+          const baseW = Math.round((isCompactH ? W * 0.28 : W * 0.44) * (editorialLogoScale / 100));
+          const maxLogoW = maxTextW;
+          const maxLogoH = Math.round(H * (isCompactH ? 0.17 : 0.16));
+          let drawW = Math.min(maxLogoW, Math.max(120, baseW));
+          let drawH = Math.round(drawW / Math.max(0.25, aspect));
+          if (drawH > maxLogoH) {
+            drawH = maxLogoH;
+            drawW = Math.round(drawH * aspect);
+          }
+
+          const logoX =
+            editorialLogoAlign === 'left' ? edPadX : Math.round((W - drawW) / 2);
+          ctx.drawImage(logoSource, logoX, cursorY, drawW, drawH);
+          cursorY += drawH + Math.round(H * (isCompactH ? 0.024 : 0.022));
+        }
+
+        // 5. White Card Editorial Content (City + Category Pill + Bold Uppercase Headline + Lead)
 
         // City + Orange Category Pill Row
         if (showCity || showBadge) {
@@ -1505,7 +1502,10 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
     hostPhotoScale,
     programLogoScale,
     artFrameTemplate,
+    showEditorialLogo,
+    editorialLogoUrl,
     editorialLogoScale,
+    editorialLogoAlign,
     editorialFooterSlogan,
     newsPortalSettings.domain,
   ]);
@@ -1515,8 +1515,18 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
     if (!canvas) return;
     const spec = ALL_FORMAT_SPECS[formatId];
     const link = document.createElement('a');
-    link.download = `fortmidia-${studioMode}-${spec.w}x${spec.h}-${Date.now()}.png`;
+    link.download = `fortnews-${studioMode}-${spec.w}x${spec.h}-${Date.now()}.png`;
     link.href = canvas.toDataURL('image/png');
+    link.click();
+  };
+
+  const handleDownloadJpg = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const spec = ALL_FORMAT_SPECS[formatId];
+    const link = document.createElement('a');
+    link.download = `fortnews-portal-${spec.w}x${spec.h}-${Date.now()}.jpg`;
+    link.href = canvas.toDataURL('image/jpeg', 0.92);
     link.click();
   };
 
@@ -1705,6 +1715,75 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
           <Hash className="h-4 w-4" />
           Legendas & # (Redes)
         </button>
+      </div>
+
+      {/* Guia de Tamanho e Formato Indicado — Portal FortNews */}
+      <div className="rounded-xl border border-[#fa6607]/30 bg-[#121215] px-4 py-3">
+        <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-0.5">
+            <div className="text-xs font-bold text-white">
+              Tamanho e Formato Indicado para o Portal FortNews
+            </div>
+            <p className="text-[11px] text-zinc-400">
+              Matérias do Portal: <strong className="text-zinc-100 font-mono tabular-nums">1280×720 px</strong> (16:9 horizontal · JPG ou PNG) · Link/WhatsApp: <strong className="text-zinc-100 font-mono tabular-nums">1200×630 px</strong> · Feed Redes: <strong className="text-zinc-100 font-mono tabular-nums">1080×1350 px</strong> (4:5) · Vídeos: <strong className="text-zinc-100 font-mono tabular-nums">1080×1920 px</strong> (9:16 · MP4).
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setStudioMode('artes');
+                setFormatId('portal_fortnews_16_9');
+              }}
+              className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+                studioMode === 'artes' && formatId === 'portal_fortnews_16_9'
+                  ? 'border-[#fa6607] bg-[#fa6607] text-white'
+                  : 'border-[#fa6607]/45 bg-[#fa6607]/12 text-white hover:bg-[#fa6607]/25'
+              }`}
+            >
+              Portal 16:9 (1280×720)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setStudioMode('artes');
+                setFormatId('portal_16_9');
+              }}
+              className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap cursor-pointer transition-colors ${
+                studioMode === 'artes' && formatId === 'portal_16_9'
+                  ? 'border-[#fa6607] bg-[#fa6607] text-white'
+                  : 'border-white/15 bg-[#0A0A0A] text-zinc-300 hover:border-white/30 hover:text-white'
+              }`}
+            >
+              Link OG (1200×630)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setStudioMode('artes');
+                setFormatId('feed_4_5');
+              }}
+              className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap cursor-pointer transition-colors ${
+                studioMode === 'artes' && formatId === 'feed_4_5'
+                  ? 'border-[#fa6607] bg-[#fa6607] text-white'
+                  : 'border-white/15 bg-[#0A0A0A] text-zinc-300 hover:border-white/30 hover:text-white'
+              }`}
+            >
+              Feed 4:5 (1080×1350)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSwitchStudioMode('molduras')}
+              className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap cursor-pointer transition-colors ${
+                studioMode === 'molduras'
+                  ? 'border-[#fa6607] bg-[#fa6607] text-white'
+                  : 'border-white/15 bg-[#0A0A0A] text-zinc-300 hover:border-white/30 hover:text-white'
+              }`}
+            >
+              Vídeo MP4 (1080×1920)
+            </button>
+          </div>
+        </div>
       </div>
 
       {studioMode === 'molduras' ? (
@@ -2296,43 +2375,153 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
                           >
                             <div className="text-[11px] font-bold">Moldura Notícia FortNews</div>
                             <p className="mt-0.5 text-[10px] text-zinc-400">
-                              Foto superior com degradê laranja, selo FortNews central, card branco editorial e rodapé diagonal.
+                              Foto superior limpa, card branco editorial com seu logo em cima da parte branca e rodapé diagonal.
                             </p>
                           </button>
                         </div>
 
                         {artFrameTemplate === 'fortnews_editorial' && (
-                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 pt-1 border-t border-white/10">
-                            <div>
-                              <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
-                                <span>Tamanho do Selo FortNews</span>
-                                <span className="font-mono font-semibold text-[#fa6607] tabular-nums">
-                                  {editorialLogoScale}%
-                                </span>
-                              </div>
-                              <input
-                                type="range"
-                                aria-label="Tamanho do selo FortNews na moldura estática"
-                                min={70}
-                                max={145}
-                                step={5}
-                                value={editorialLogoScale}
-                                onChange={(e) => setEditorialLogoScale(Number(e.target.value))}
-                                className="w-full accent-[#fa6607] cursor-pointer"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[10px] text-zinc-400 mb-1">
-                                Slogan no Rodapé Direito
+                          <div className="space-y-3 pt-2 border-t border-white/10">
+                            {/* Logo Controls on White Area */}
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <label className="inline-flex items-center gap-2 text-[11px] font-semibold text-zinc-200 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={showEditorialLogo}
+                                  onChange={(e) => setShowEditorialLogo(e.target.checked)}
+                                  className="h-3.5 w-3.5 accent-[#fa6607] cursor-pointer"
+                                />
+                                Incluir Logo em cima da parte branca
                               </label>
-                              <input
-                                type="text"
-                                value={editorialFooterSlogan}
-                                onChange={(e) => setEditorialFooterSlogan(e.target.value)}
-                                placeholder="Informação que conecta você"
-                                className="w-full rounded border border-white/15 bg-[#121215] px-2.5 py-1 text-[11px] text-white"
-                              />
+
+                              {showEditorialLogo && (
+                                <div className="flex items-center gap-1.5">
+                                  <label className="inline-flex items-center gap-1 rounded-md border border-[#fa6607]/50 bg-[#fa6607]/15 px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-[#fa6607]/25 cursor-pointer">
+                                    <Upload className="h-3 w-3 text-[#fa6607]" aria-hidden="true" />
+                                    Enviar Logo
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      className="hidden"
+                                      onChange={(e) => readFileAsUrl(e, setEditorialLogoUrl)}
+                                    />
+                                  </label>
+                                  <div className="inline-flex rounded-md border border-white/15 bg-[#121215] p-0.5 text-[10px]">
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditorialLogoAlign('center')}
+                                      className={`rounded px-2 py-0.5 font-medium cursor-pointer ${
+                                        editorialLogoAlign === 'center'
+                                          ? 'bg-[#fa6607] text-white'
+                                          : 'text-zinc-400 hover:text-white'
+                                      }`}
+                                    >
+                                      Centro
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditorialLogoAlign('left')}
+                                      className={`rounded px-2 py-0.5 font-medium cursor-pointer ${
+                                        editorialLogoAlign === 'left'
+                                          ? 'bg-[#fa6607] text-white'
+                                          : 'text-zinc-400 hover:text-white'
+                                      }`}
+                                    >
+                                      Esquerda
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
+
+                            {showEditorialLogo && (
+                              <div className="space-y-2">
+                                <div className="flex flex-wrap gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditorialLogoUrl(OFFICIAL_FORTNEWS_VECTOR_LOGO)}
+                                    className={`rounded border px-2 py-1 text-[10px] cursor-pointer ${
+                                      editorialLogoUrl === OFFICIAL_FORTNEWS_VECTOR_LOGO
+                                        ? 'border-[#fa6607] bg-[#fa6607]/15 text-white'
+                                        : 'border-white/10 bg-[#121215] text-zinc-400 hover:text-white'
+                                    }`}
+                                  >
+                                    Logo FortNews Ondas (Oficial)
+                                  </button>
+                                  {OFFICIAL_BRAND_LOGOS.slice(0, 3).map((l) => (
+                                    <button
+                                      key={l.url}
+                                      type="button"
+                                      onClick={() => setEditorialLogoUrl(l.url)}
+                                      className={`rounded border px-2 py-1 text-[10px] cursor-pointer ${
+                                        editorialLogoUrl === l.url
+                                          ? 'border-[#fa6607] bg-[#fa6607]/15 text-white'
+                                          : 'border-white/10 bg-[#121215] text-zinc-400 hover:text-white'
+                                      }`}
+                                    >
+                                      {l.label.replace(' (Oficial)', '').replace(' (Institucional)', '')}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                  <div>
+                                    <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
+                                      <span>Tamanho do Logo</span>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="font-mono font-semibold text-[#fa6607] tabular-nums">
+                                          {editorialLogoScale}%
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => setEditorialLogoScale(100)}
+                                          className="rounded border border-white/10 px-1 py-0.5 text-[9px] text-zinc-400 hover:text-white cursor-pointer"
+                                        >
+                                          Padrão
+                                        </button>
+                                      </div>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      aria-label="Tamanho do logo sobre a parte branca"
+                                      min={40}
+                                      max={180}
+                                      step={5}
+                                      value={editorialLogoScale}
+                                      onChange={(e) => setEditorialLogoScale(Number(e.target.value))}
+                                      className="w-full accent-[#fa6607] cursor-pointer"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] text-zinc-400 mb-1">
+                                      Slogan no Rodapé Direito
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={editorialFooterSlogan}
+                                      onChange={(e) => setEditorialFooterSlogan(e.target.value)}
+                                      placeholder="Informação que conecta você"
+                                      className="w-full rounded border border-white/15 bg-[#121215] px-2.5 py-1 text-[11px] text-white"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {!showEditorialLogo && (
+                              <div>
+                                <label className="block text-[10px] text-zinc-400 mb-1">
+                                  Slogan no Rodapé Direito
+                                </label>
+                                <input
+                                  type="text"
+                                  value={editorialFooterSlogan}
+                                  onChange={(e) => setEditorialFooterSlogan(e.target.value)}
+                                  placeholder="Informação que conecta você"
+                                  className="w-full rounded border border-white/15 bg-[#121215] px-2.5 py-1 text-[11px] text-white"
+                                />
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -3161,6 +3350,14 @@ export const MarketingStudioModule: React.FC<MarketingStudioModuleProps> = ({
                   </button>
                 </div>
               )}
+              <button
+                type="button"
+                onClick={handleDownloadJpg}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#16161A] px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:border-[#fa6607]/60 hover:text-white cursor-pointer"
+              >
+                <Download className="h-3.5 w-3.5 text-[#fa6607]" />
+                JPG (Portal)
+              </button>
               <button
                 type="button"
                 onClick={handleDownloadPng}

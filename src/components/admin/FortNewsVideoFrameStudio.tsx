@@ -21,7 +21,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import { NEWS_TERRITORIES } from '../../data/initialData';
+import { NEWS_TERRITORIES, OFFICIAL_BRAND_LOGOS } from '../../data/initialData';
 import { useFortMidia } from '../../context/FortMidiaContext';
 import { PautaSearchPicker } from './PautaSearchPicker';
 import {
@@ -44,6 +44,7 @@ interface VideoFramePreset {
   builtIn?: boolean;
   template: VideoFrameTemplate;
   accentColor: string;
+  showLogo?: boolean;
   logoUrl: string;
   logoScale: number;
   reportagemTitle: string;
@@ -227,23 +228,29 @@ function trimTransparentImage(img: HTMLImageElement): HTMLCanvasElement | null {
   }
 }
 
-function getVerticalFullScreenMetrics(logoScale: number, logoAspect: number) {
+function getVerticalFullScreenMetrics(
+  logoScale: number,
+  logoAspect: number,
+  showLogo: boolean
+) {
   const W = CANVAS_W;
   const H = CANVAS_H;
   const safeAspect = Number.isFinite(logoAspect) && logoAspect > 0.4 ? logoAspect : 3.15;
-  const drawW = Math.min(W - 44, Math.max(320, Math.round(620 * (logoScale / 100))));
-  const drawH = Math.min(320, Math.round(drawW / safeAspect));
-  const logoTopY = 12;
+  const drawW = showLogo
+    ? Math.min(W - 64, Math.max(220, Math.round(580 * (logoScale / 100))))
+    : 0;
+  const drawH = showLogo ? Math.min(340, Math.round(drawW / safeAspect)) : 0;
+  const logoTopY = showLogo ? 22 : 0;
   const logoBottomY = logoTopY + drawH;
-  // Seam sits right between the upper waveform and the slanted FortNews block so the black+orange waveform stays crisp on white
-  const headerY = Math.max(66, Math.min(148, Math.round(logoTopY + drawH * 0.34)));
-  const headlineAreaH = 176;
-  const videoY = Math.max(388, logoBottomY + headlineAreaH);
-  const orangeFooterH = 166;
+  // Entire logo sits cleanly ON TOP OF the pure white top band (zero overlap into black bar)
+  const headerY = showLogo ? logoBottomY + 22 : 0;
+  const headlineAreaH = 186;
+  const videoY = headerY + headlineAreaH;
+  const orangeFooterH = 164;
   const splitFooterH = 82;
   const splitFooterY = H - splitFooterH;
   const orangeFooterY = splitFooterY - orangeFooterH;
-  const videoH = Math.max(920, orangeFooterY - videoY);
+  const videoH = Math.max(880, orangeFooterY - videoY);
 
   return {
     drawW,
@@ -670,6 +677,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
   // Template & Branding (Official FortNews vertical broadcast frame selected by default)
   const [template, setTemplate] = useState<VideoFrameTemplate>(initialPreset.template);
   const [accentColor, setAccentColor] = useState(initialPreset.accentColor);
+  const [showLogo, setShowLogo] = useState<boolean>(initialPreset.showLogo ?? true);
   const [logoUrl, setLogoUrl] = useState(
     initialPreset.logoUrl || OFFICIAL_FORTNEWS_VECTOR_LOGO_URL
   );
@@ -739,6 +747,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     setActivePresetId(preset.id);
     setTemplate(preset.template);
     setAccentColor(preset.accentColor);
+    setShowLogo(preset.showLogo ?? true);
     setLogoUrl(preset.logoUrl || OFFICIAL_FORTNEWS_VECTOR_LOGO_URL);
     setLogoScale(preset.logoScale || 105);
     setReportagemTitle(preset.reportagemTitle);
@@ -765,6 +774,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     builtIn: false,
     template,
     accentColor,
+    showLogo,
     logoUrl,
     logoScale,
     reportagemTitle,
@@ -907,7 +917,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
       } else {
         const trimmed = logoTrimmedRef.current;
         const logoAspect = trimmed ? trimmed.width / Math.max(1, trimmed.height) : 3.15;
-        const m = getVerticalFullScreenMetrics(logoScale, logoAspect);
+        const m = getVerticalFullScreenMetrics(logoScale, logoAspect, showLogo);
         ctx.fillStyle = '#050507';
         ctx.fillRect(0, 0, W, H);
         drawMediaIntoWindow(
@@ -923,7 +933,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         );
       }
     },
-    [template, mediaFit, mediaZoom, mediaOffsetY, logoScale, assetsTick]
+    [template, mediaFit, mediaZoom, mediaOffsetY, showLogo, logoScale, assetsTick]
   );
 
   // Draws ONLY the moldura graphics (supports transparent video cutout for CapCut & fast offline compositing!)
@@ -969,41 +979,37 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         ctx.fillRect(0, 0, 12, headerH);
         ctx.fillRect(W - 12, 0, 12, headerH);
 
-        const logoSource = logoTrimmedRef.current || logoImgRef.current;
-        const scaleRatio = Math.max(0.6, Math.min(1.6, logoScale / 100));
-        const plaqueW = Math.min(W - 64, Math.max(540, Math.round(620 * scaleRatio)));
-        const plaqueH = Math.min(220, Math.max(156, Math.round(186 * Math.min(1.18, scaleRatio))));
-        const plaqueX = (W - plaqueW) / 2;
-        const plaqueY = 0;
-        drawRoundedRectPath(ctx, plaqueX, plaqueY, plaqueW, plaqueH, {
-          tl: 0,
-          tr: 0,
-          br: 20,
-          bl: 20,
-        });
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fill();
+        if (showLogo) {
+          const logoSource = logoTrimmedRef.current || logoImgRef.current;
+          const scaleRatio = Math.max(0.4, Math.min(1.8, logoScale / 100));
+          const plaqueW = Math.min(W - 48, Math.max(360, Math.round(620 * scaleRatio)));
+          const plaqueH = Math.min(230, Math.max(120, Math.round(186 * Math.min(1.24, scaleRatio))));
+          const plaqueX = (W - plaqueW) / 2;
+          const plaqueY = 0;
+          drawRoundedRectPath(ctx, plaqueX, plaqueY, plaqueW, plaqueH, {
+            tl: 0,
+            tr: 0,
+            br: 20,
+            bl: 20,
+          });
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fill();
 
-        if (logoSource) {
-          const pad = 16;
-          const availW = plaqueW - pad * 2;
-          const availH = plaqueH - pad * 2;
-          const scale = Math.min(availW / logoSource.width, availH / logoSource.height);
-          const lw = logoSource.width * scale;
-          const lh = logoSource.height * scale;
-          ctx.drawImage(
-            logoSource,
-            plaqueX + (plaqueW - lw) / 2,
-            plaqueY + (plaqueH - lh) / 2,
-            lw,
-            lh
-          );
-        } else {
-          ctx.fillStyle = '#09090B';
-          ctx.font = '900 66px "Plus Jakarta Sans", Inter, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText('FortNews', W / 2, plaqueH / 2);
+          if (logoSource) {
+            const pad = 16;
+            const availW = plaqueW - pad * 2;
+            const availH = plaqueH - pad * 2;
+            const scale = Math.min(availW / logoSource.width, availH / logoSource.height);
+            const lw = logoSource.width * scale;
+            const lh = logoSource.height * scale;
+            ctx.drawImage(
+              logoSource,
+              plaqueX + (plaqueW - lw) / 2,
+              plaqueY + (plaqueH - lh) / 2,
+              lw,
+              lh
+            );
+          }
         }
 
         ctx.fillStyle = '#FFFFFF';
@@ -1015,7 +1021,13 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
           (topHeadline || 'PLANTÃO REGIONAL').toUpperCase(),
           585
         ).slice(0, 2);
-        let hy = headLines.length === 1 ? 286 : 238;
+        let hy = showLogo
+          ? headLines.length === 1
+            ? 286
+            : 238
+          : headLines.length === 1
+            ? 210
+            : 158;
         for (const line of headLines) {
           ctx.fillText(line, 44, hy);
           hy += 82;
@@ -1156,7 +1168,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         const logoAspect = logoSource
           ? logoSource.width / Math.max(1, logoSource.height)
           : 3.15;
-        const m = getVerticalFullScreenMetrics(logoScale, logoAspect);
+        const m = getVerticalFullScreenMetrics(logoScale, logoAspect, showLogo);
 
         const cardX = 0;
         const cardW = W; // 1080px — Tela inteira sem margens laterais
@@ -1164,7 +1176,6 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
           drawW,
           drawH,
           logoTopY,
-          logoBottomY,
           headerY,
           headerH,
           videoY,
@@ -1175,14 +1186,20 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
           splitFooterH,
         } = m;
 
-        // 1. Clean Light Full-Width Top Strip behind the official black+orange waveform (100% contrast, zero side margins)
-        ctx.save();
-        const topStripGrad = ctx.createLinearGradient(0, 0, 0, headerY);
-        topStripGrad.addColorStop(0, '#FFFFFF');
-        topStripGrad.addColorStop(1, '#EFF1F5');
-        ctx.fillStyle = topStripGrad;
-        ctx.fillRect(0, 0, W, headerY);
-        ctx.restore();
+        // 1. Pure White Full-Width Top Area so the real Logo sits 100% cleanly on white without any mask/overlap
+        if (showLogo && headerY > 0) {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, W, headerY);
+
+          if (logoSource && drawW > 0 && drawH > 0) {
+            const lx = Math.round((W - drawW) / 2);
+            ctx.drawImage(logoSource, lx, logoTopY, drawW, drawH);
+          }
+
+          // Clean thin orange hairline separating white logo bar from black headline block
+          ctx.fillStyle = accentColor;
+          ctx.fillRect(0, headerY - 6, W, 6);
+        }
 
         // 2. Full-Width Black Editorial Header Block + Left Vertical Accent Stripe
         ctx.fillStyle = '#050507';
@@ -1191,21 +1208,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         ctx.fillStyle = accentColor;
         ctx.fillRect(cardX, headerY, 16, headerH);
 
-        // 3. Official Vectorized FortNews Logo (centered, auto-trimmed, user-resizable)
-        if (logoSource) {
-          ctx.save();
-          ctx.shadowColor = 'rgba(0, 0, 0, 0.32)';
-          ctx.shadowBlur = 16;
-          ctx.shadowOffsetY = 4;
-          const lx = Math.round((W - drawW) / 2);
-          ctx.drawImage(logoSource, lx, logoTopY, drawW, drawH);
-          ctx.restore();
-        } else {
-          drawTopAudioWaveform(ctx, W / 2, 36, '#09090B', accentColor);
-          drawSlantedFortNewsBadge(ctx, W / 2, 64, accentColor, null, true, sloganText);
-        }
-
-        // 4. Bold White 2-Line Headline + Inline Rounded Orange Tag Pill (e.g. CIMBAJU)
+        // 3. Bold White 2-Line Headline + Inline Rounded Orange Tag Pill (e.g. CIMBAJU)
         const rawTitle = (reportagemTitle || 'COBERTURA EXCLUSIVA\nMATÉRIA EM VÍDEO')
           .trim()
           .toUpperCase();
@@ -1260,9 +1263,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
 
-        const headlineZoneTop = Math.max(headerY + 110, logoBottomY + 14);
-        const headlineZoneBottom = videoY - 14;
-        const headlineZoneMid = (headlineZoneTop + headlineZoneBottom) / 2;
+        const headlineZoneMid = headerY + headerH / 2;
 
         if (line2) {
           const line1Y = headlineZoneMid - 38;
@@ -1413,6 +1414,7 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
     [
       template,
       accentColor,
+      showLogo,
       logoUrl,
       logoScale,
       topHeadline,
@@ -2435,63 +2437,102 @@ export const FortNewsVideoFrameStudio: React.FC = () => {
               </div>
 
               <div>
-                <label className="mb-1.5 block text-[11px] text-zinc-400">Logo do Topo</label>
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    ref={logoFileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleUploadLogo}
-                    className="hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => logoFileInputRef.current?.click()}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-[#16161A] px-3 py-2 text-xs text-zinc-200 hover:bg-white/10 cursor-pointer"
-                  >
-                    <Upload className="h-3.5 w-3.5 text-[#fa6607]" aria-hidden="true" />
-                    Trocar Logo
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLogoUrl(OFFICIAL_FORTNEWS_VECTOR_LOGO_URL);
-                      setLogoScale(105);
-                    }}
-                    className="rounded-lg border border-white/10 px-2.5 py-2 text-[11px] text-zinc-400 hover:text-white cursor-pointer"
-                  >
-                    Logo Oficial FortNews
-                  </button>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <label className="text-[11px] text-zinc-400">
+                    Logo em cima da parte branca
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showLogo}
+                      onChange={(e) => setShowLogo(e.target.checked)}
+                      className="h-3.5 w-3.5 accent-[#fa6607] cursor-pointer"
+                    />
+                    Incluir Logo
+                  </label>
                 </div>
 
-                {/* Tamanho do Logo */}
-                <div className="mt-3 space-y-1.5">
-                  <div className="flex items-center justify-between text-[11px] text-zinc-400">
-                    <span>Tamanho do Logo</span>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-semibold text-[#fa6607] tabular-nums">
-                        {logoScale}%
-                      </span>
+                {showLogo ? (
+                  <div className="space-y-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        ref={logoFileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleUploadLogo}
+                        className="hidden"
+                      />
                       <button
                         type="button"
-                        onClick={() => setLogoScale(105)}
-                        className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:text-white cursor-pointer"
+                        onClick={() => logoFileInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-[#fa6607]/50 bg-[#fa6607]/15 px-3 py-2 text-xs font-semibold text-white hover:bg-[#fa6607]/25 cursor-pointer"
                       >
-                        Padrão
+                        <Upload className="h-3.5 w-3.5 text-[#fa6607]" aria-hidden="true" />
+                        Enviar / Trocar Logo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLogoUrl(OFFICIAL_FORTNEWS_VECTOR_LOGO_URL);
+                          setLogoScale(105);
+                        }}
+                        className="rounded-lg border border-white/10 px-2.5 py-2 text-[11px] text-zinc-300 hover:border-[#fa6607]/50 hover:text-white cursor-pointer"
+                      >
+                        Logo Oficial FortNews
                       </button>
                     </div>
+
+                    <div className="flex flex-wrap gap-1.5">
+                      {OFFICIAL_BRAND_LOGOS.slice(0, 4).map((item) => (
+                        <button
+                          key={item.url}
+                          type="button"
+                          onClick={() => setLogoUrl(item.url)}
+                          className={`rounded border px-2 py-1 text-[10px] cursor-pointer transition-colors ${
+                            logoUrl === item.url
+                              ? 'border-[#fa6607] bg-[#fa6607]/15 text-white'
+                              : 'border-white/10 bg-[#16161A] text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          {item.label.replace(' (Oficial)', '').replace(' (Institucional)', '')}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Tamanho do Logo */}
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                        <span>Tamanho do Logo</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-semibold text-[#fa6607] tabular-nums">
+                            {logoScale}%
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setLogoScale(105)}
+                            className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:text-white cursor-pointer"
+                          >
+                            Padrão
+                          </button>
+                        </div>
+                      </div>
+                      <input
+                        type="range"
+                        aria-label="Tamanho do logo da moldura"
+                        min={40}
+                        max={180}
+                        step={5}
+                        value={logoScale}
+                        onChange={(e) => setLogoScale(Number(e.target.value))}
+                        className="w-full accent-[#fa6607] cursor-pointer"
+                      />
+                    </div>
                   </div>
-                  <input
-                    type="range"
-                    aria-label="Tamanho do logo da moldura"
-                    min={60}
-                    max={160}
-                    step={5}
-                    value={logoScale}
-                    onChange={(e) => setLogoScale(Number(e.target.value))}
-                    className="w-full accent-[#fa6607] cursor-pointer"
-                  />
-                </div>
+                ) : (
+                  <p className="rounded-lg border border-white/10 bg-[#0A0A0A] px-3 py-2 text-[11px] text-zinc-400">
+                    Logo desativado. Marque &quot;Incluir Logo&quot; para adicionar o logotipo oficial ou personalizado sobre a faixa branca superior.
+                  </p>
+                )}
               </div>
             </div>
 
